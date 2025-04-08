@@ -1,3 +1,7 @@
+const std = @import("std");
+
+const dlg = @import("dlg.zig");
+
 pub fn main() !void {
     const ally = std.heap.page_allocator;
     var prng = std.Random.DefaultPrng.init(blk: {
@@ -7,7 +11,7 @@ pub fn main() !void {
     });
     const rand = prng.random();
 
-    const net = try Network.initRandom(ally, &[_]usize{ 16, 1024, 512, 256, 128, 64, 32, 16, 8 });
+    const net = try dlg.Network.initRandom(ally, &[_]usize{ 16, 1024, 512, 256, 128, 64, 32, 16, 8 });
     const beta_1 = 0.9;
     const beta_2 = 0.999;
     const epsilon = 1e-08;
