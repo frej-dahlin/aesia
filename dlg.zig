@@ -192,7 +192,7 @@ pub const Network = struct {
                     const child = nodes[child_index];
                     const a = nodes[child.parents[0]].value;
                     const b = nodes[child.parents[1]].value;
-                    node.delta += child.delta * if (child.parents[0] == j)
+                    node.delta += 2 * child.delta * if (child.parents[0] == from + j)
                         child.del_a(b)
                     else
                         child.del_b(a);
