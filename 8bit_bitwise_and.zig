@@ -11,7 +11,7 @@ pub fn main() !void {
     });
     const rand = prng.random();
 
-    const net = try dlg.Network.initRandom(ally, &[_]usize{ 16, 512, 256, 128, 64, 32, 16, 8 });
+    const net = try dlg.Network.initRandom(ally, &[_]usize{ 16, 128, 128, 128, 128, 128, 128, 128, 128, 64, 32, 16, 8});
     const beta_1 = 0.9;
     const beta_2 = 0.999;
     const epsilon = 1e-08;
@@ -25,13 +25,16 @@ pub fn main() !void {
     const batch_size = 1;
     var x: [16]f32 = undefined;
     var y: [8]f32 = undefined;
+    var niter: usize = 0;
     while (true) {
+    	niter += 1;
         var mse: f32 = 0;
-        for (net.nodes) |*node| node.gradient = [_]f32{0} ** 16;
+        @memset(net.nodes.items(.gradient), [_]f32{0} ** 16);
         for (0..batch_size) |j| {
+        	_ = j;
             const a: u8 = @truncate(rand.uintLessThan(usize, std.math.maxInt(u8)));
             const b: u8 = @truncate(rand.uintLessThan(usize, std.math.maxInt(u8)));
-            const sum: u8 = a & b;
+            const sum: u8 = a +% b;
             inline for (x[0..8], 0..) |*softbit, i| {
                 softbit.* = if ((1 << i) & a != 0) 1 else 0;
             }
@@ -42,33 +45,33 @@ pub fn main() !void {
                 softbit.* = if ((1 << i) & sum != 0) 1 else 0;
             }
             net.update_gradient(&x, &y);
-            for (net.lastLayer(), y) |node, softbit| {
-                mse += (node.value - softbit) * (node.value - softbit) / batch_size / 2;
+            for (net.nodes.items(.value)[net.nodes.len - net.shape[net.shape.len - 1]..], y) |value, softbit| {
+                mse += (value - softbit) * (value - softbit) / batch_size / 2;
             }
-            if (j == batch_size - 1) {
-                var softsum: f32 = 0;
-                var base: f32 = 1;
-                for (net.lastLayer()) |node| {
-                    softsum += base * @round(node.value);
-                    base *= 2;
-                }
-                std.debug.print("{d} == {d}\n", .{ sum, softsum });
-            }
+            //if (j == batch_size - 1) {
+                //var softsum: f32 = 0;
+                //var base: f32 = 1;
+                //for (net.lastLayer()) |node| {
+                    //softsum += base * @round(node.value);
+                    //base *= 2;
+                //}
+                //std.debug.print("{d} == {d}\n", .{ sum, softsum });
+            //}
         }
-        for (net.nodes, adam_m, adam_v) |*node, *ml, *vl| {
+        for (net.nodes.items(.weights), net.nodes.items(.gradient), adam_m, adam_v) |*weights, gradient, *ml, *vl| {
             const denom: f32 = 1; //batch_size;
             ml.* = @as(dlg.v16f32, @splat(beta_1)) * ml.* +
                 @as(dlg.v16f32, @splat((1 - beta_1) / denom)) *
-                    node.gradient;
+                    gradient;
             vl.* = @as(dlg.v16f32, @splat(beta_2)) * vl.* +
                 @as(dlg.v16f32, @splat((1 - beta_2) / denom / denom)) *
-                    node.gradient * node.gradient;
+                    gradient * gradient;
             const m_hat = ml.* / @as(dlg.v16f32, @splat(1 - beta_1));
             const v_hat = vl.* / @as(dlg.v16f32, @splat(1 - beta_2));
-            node.weights -= @as(dlg.v16f32, @splat(learn_rate)) * m_hat /
+            weights.* -= @as(dlg.v16f32, @splat(learn_rate)) * m_hat /
                 (@sqrt(v_hat) + @as(dlg.v16f32, @splat(epsilon)));
         }
-        std.debug.print("{d}\n", .{mse});
+        if (niter % 1000 == 0) std.debug.print("{d}\n", .{mse});
     }
     net.deinit(ally);
 }
