@@ -83,10 +83,6 @@ pub fn softmax(w: v16f32) v16f32 {
     return sigma / @as(v16f32, @splat(denom));
 }
 
-pub fn kronecker_delta(T: type, i: anytype, j: anytype) T {
-    return if (i == j) 1 else 0;
-}
-
 // Fixme: Make float type an optional parameter.
 pub const Network = struct {
     // Indices into the nodes slice.
