@@ -7,11 +7,12 @@ const MultiArrayList = std.MultiArrayList;
 const ArrayList = std.ArrayList;
 const AutoArrayHashMap = std.AutoArrayHashMap;
 
-pub const v16f32 = @Vector(16, f32);
+pub const f32x16 = @Vector(16, f32);
 
 const SoftGate = struct {
     /// Returns a vector containg representing all values of a soft logic gate.
-    pub fn vector(a: f32, b: f32) v16f32 {
+    pub fn vector(a: f32, b: f32) f32x16 {
+    	@setFloatMode(.optimized);
         return .{
             0,
             a * b,
@@ -34,7 +35,8 @@ const SoftGate = struct {
 
     /// Returns a the soft gate vector differentiated by the first variable.
     /// Note that it only depends on the second.
-    pub fn del_a(b: f32) v16f32 {
+    pub fn del_a(b: f32) f32x16 {
+    	@setFloatMode(.optimized);
         return .{
             0,
             b,
@@ -55,7 +57,8 @@ const SoftGate = struct {
         };
     }
 
-    pub fn del_b(a: f32) v16f32 {
+    pub fn del_b(a: f32) f32x16 {
+    	@setFloatMode(.optimized);
         return .{
             0,
             a,
@@ -77,11 +80,6 @@ const SoftGate = struct {
     }
 };
 
-pub fn softmax(w: v16f32) v16f32 {
-    const sigma = @exp(w);
-    const denom = @reduce(.Add, sigma);
-    return sigma / @as(v16f32, @splat(denom));
-}
 
 // Fixme: Make float type an optional parameter.
 pub const Network = struct {
@@ -96,9 +94,9 @@ pub const Network = struct {
         parents: [2]NodeIndex,
         children: []NodeIndex,
 
-        weights: v16f32,
+        weights: f32x16,
         // The gradient of the cost function with respect to the weights of the node.
-        gradient: v16f32,
+        gradient: f32x16,
         // The current feedforward value.
         value: f32 = 0,
         // Used for backpropagation, defined as dC/dvalue,
@@ -106,13 +104,8 @@ pub const Network = struct {
         delta: f32,
 
         // Adam optimizer data.
-        adam_v: v16f32,
-        adam_m: v16f32,
-
-        pub fn eval(node: Node, a: f32, b: f32) f32 {
-            const sigma = softmax(node.weights);
-            return @reduce(.Add, sigma * SoftGate.vector(a, b));
-        }
+        adam_v: f32x16,
+        adam_m: f32x16,
 
         // Returns the derivative of eval with respect to the first parent.
         pub fn del_a(node: Node, b: f32) f32 {
@@ -126,17 +119,17 @@ pub const Network = struct {
             return @reduce(.Add, sigma * SoftGate.del_b(a));
         }
 
-        pub fn eval_(weights: v16f32, a: f32, b: f32) f32 {
+        pub fn eval_(weights: f32x16, a: f32, b: f32) f32 {
             const sigma = softmax(weights);
             return @reduce(.Add, sigma * SoftGate.vector(a, b));
         }
 
-        pub fn del_a_(weights: v16f32, b: f32) f32 {
+        pub fn del_a_(weights: f32x16, b: f32) f32 {
             const sigma = softmax(weights);
             return @reduce(.Add, sigma * SoftGate.del_a(b));
         }
 
-        pub fn del_b_(weights: v16f32, a: f32) f32 {
+        pub fn del_b_(weights: f32x16, a: f32) f32 {
             const sigma = softmax(weights);
             return @reduce(.Add, sigma * SoftGate.del_b(a));
         }
@@ -144,12 +137,22 @@ pub const Network = struct {
 
     input_dim: usize,
     layers: []MultiArrayList(Node).Slice,
-
+    
+    // Note: This is the hottest part of the code, I *think* that AVX-512 should handle it with gusto,
+    // but testing is required. Consider caching the result, this can be a compile time option.
+	pub fn softmax(w: f32x16) f32x16 {
+	    @setFloatMode(.optimized);
+	    const sigma = @exp2(w);
+	    const denom = @reduce(.Add, sigma);
+	    return sigma / @as(f32x16, @splat(denom));
+	}
+	
     pub fn lastLayer(net: Network) MultiArrayList(Node).Slice {
         return net.layers[net.layers.len - 1];
     }
 
     pub fn eval(net: Network, x: []const f32) void {
+    	@setFloatMode(.optimized);
         assert(x.len == net.input_dim);
 
 	// Note: Two for loops is faster than a single with a branch.
@@ -174,7 +177,7 @@ pub const Network = struct {
     // See the definition of the Node struct.
     // Fixme: Currently assumes the network is trained with a halved mean square error.
     pub fn backprop(net: Network, x: []const f32, y: []const f32) void {
-
+    	@setFloatMode(.optimized);
         const last = net.lastLayer();
         assert(x.len == net.input_dim);
         assert(y.len == last.len);
@@ -200,6 +203,12 @@ pub const Network = struct {
                     const b = values[child.parents[1]];
                     delta.* += child.delta * if (child.parents[0] == parent_index) child.del_a(b) else child.del_b(a);
                 }
+                
+                for (children) |child_index| {
+                	const parents = after.items(.parents)[child_index];
+                	const delta = after.items(.delta)[child_index];
+                	
+                }
             }
         }
     }
@@ -208,10 +217,12 @@ pub const Network = struct {
     // Fixme: Now the gradient of softmax is hardcoded.
     // Fixme: Move the inner 2 for loops to a separate function.
     pub fn update_gradient(net: Network, x: []const f32, y: []const f32) void {
+    	@setFloatMode(.optimized);
         assert(x.len == net.input_dim);
         assert(y.len == net.lastLayer().len);
 
         net.backprop(x, y);
+        const tau = @log(2.0);
 
         for (net.layers, 0..) |layer, i| {
             // This branch does not have a huge impact, but consider splitting into two loops.
@@ -221,14 +232,8 @@ pub const Network = struct {
                 const b = prev_values[parents[1]];
                 const gate = SoftGate.vector(a, b);
                 const sigma = softmax(weights);
-                const e1: v16f32 = .{1} ++ .{0} ** 15;
-                var result: [16]f32 = .{0} ** 16;
-                inline for (&result, 0..) |*partial, k| {
-                    const kronecker = std.simd.rotateElementsRight(e1, k);
-                    const sigma_k: v16f32 = @splat(@reduce(.Add, kronecker * sigma));
-                    partial.* += @reduce(.Add, sigma * gate * (kronecker - sigma_k) * @as(v16f32, @splat(delta)));
-                }
-                gradient.* += result;
+                const value = @reduce(.Add, sigma * gate);
+                gradient.* += @as(f32x16, @splat(tau * delta)) * sigma * (gate - @as(f32x16, @splat(value)));
             }
         }
     }
@@ -279,7 +284,7 @@ pub const Network = struct {
             @memset(layer.items(.adam_v), [_]f32{0} ** 16);
         }
 
-	// Initialize node parents such that each node has at least one child, excluding the last layer.
+	    // Initialize node parents such that each node has at least one child, excluding the last layer.
         var stack = try ArrayList(usize).initCapacity(allocator, std.mem.max(usize, shape));
         defer stack.deinit();
         for (net.layers, shape[0..shape.len - 1]) |layer, prev_dim| {
@@ -297,7 +302,7 @@ pub const Network = struct {
                 parents.* = .{ @truncate(first), @truncate(second) };
             }
         }
-	// Find the children of each node.
+        // Find the children of each node.
         var buffer = ArrayList(NodeIndex).init(allocator);
         defer buffer.deinit();
         for (net.layers[0 .. net.layers.len - 1], net.layers[1..]) |*layer, next| {
