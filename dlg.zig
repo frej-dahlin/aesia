@@ -187,7 +187,7 @@ pub const Network = struct {
             delta.* = value - y_value;
         }
         // Compute the delta of the previous layers, back to front.
-        for (2..net.layers.len) |i| {
+        for (2..net.layers.len + 1) |i| {
             const layer = net.layers[net.layers.len - i];
             const after = net.layers[net.layers.len + 1 - i];
             const values = layer.items(.value);
@@ -275,13 +275,18 @@ pub const Network = struct {
             }
             @memset(layer.items(.gradient), [_]f32{0} ** 16);
             @memset(layer.items(.children), &.{});
+            @memset(layer.items(.adam_m), [_]f32{0} ** 16);
+            @memset(layer.items(.adam_v), [_]f32{0} ** 16);
         }
 
+	// Initialize node parents such that each node has at least one child, excluding the last layer.
         var stack = try ArrayList(usize).initCapacity(allocator, std.mem.max(usize, shape));
         defer stack.deinit();
         for (net.layers, shape[0..shape.len - 1]) |layer, prev_dim| {
+            // Fill the stack with all possible indices of the previous layer in random order.
        	    for (0..prev_dim) |i| stack.appendAssumeCapacity(i);
 	    rand.shuffle(usize, stack.items);
+
             for (layer.items(.parents)) |*parents| {
                 const first = stack.pop() orelse rand.uintLessThan(usize, prev_dim);
                 const second = stack.pop() orelse while (true) {
@@ -292,7 +297,7 @@ pub const Network = struct {
                 parents.* = .{ @truncate(first), @truncate(second) };
             }
         }
-
+	// Find the children of each node.
         var buffer = ArrayList(NodeIndex).init(allocator);
         defer buffer.deinit();
         for (net.layers[0 .. net.layers.len - 1], net.layers[1..]) |*layer, next| {
@@ -322,7 +327,7 @@ pub const Network = struct {
         		}
         	}
         }
-
+        
         return net;
     }
 };
