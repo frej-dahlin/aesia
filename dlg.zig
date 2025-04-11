@@ -117,19 +117,9 @@ pub const Network = struct {
             return @reduce(.Add, sigma * SoftGate.del_b(a));
         }
 
-        pub fn eval_(weights: f32x16, a: f32, b: f32) f32 {
+        pub fn eval(weights: f32x16, a: f32, b: f32) f32 {
             const sigma = softmax(weights);
             return @reduce(.Add, sigma * SoftGate.vector(a, b));
-        }
-
-        pub fn del_a_(weights: f32x16, b: f32) f32 {
-            const sigma = softmax(weights);
-            return @reduce(.Add, sigma * SoftGate.del_a(b));
-        }
-
-        pub fn del_b_(weights: f32x16, a: f32) f32 {
-            const sigma = softmax(weights);
-            return @reduce(.Add, sigma * SoftGate.del_b(a));
         }
     };
 
@@ -144,7 +134,7 @@ pub const Network = struct {
         const denom = @reduce(.Add, sigma);
         return sigma / @as(f32x16, @splat(denom));
     }
-    
+
     pub fn lastLayer(net: Network) MultiArrayList(Node).Slice {
         return net.layers[net.layers.len - 1];
     }
@@ -153,20 +143,20 @@ pub const Network = struct {
         @setFloatMode(.optimized);
         assert(x.len == net.input_dim);
 
+        // Evaluate the network, layer by layer.
         // Note: Two for loops is faster than a single with a branch.
         const first = net.layers[0];
         for (first.items(.value), first.items(.parents), first.items(.weights)) |*value, parents, weights| {
             const a = x[parents[0]];
             const b = x[parents[1]];
-            value.* = Node.eval_(weights, a, b);
+            value.* = Node.eval(weights, a, b);
         }
-
         for (net.layers[1..], net.layers[0 .. net.layers.len - 1]) |layer, prev| {
             const prev_values = prev.items(.value);
             for (layer.items(.value), layer.items(.parents), layer.items(.weights)) |*value, parents, weights| {
                 const a = prev_values[parents[0]];
                 const b = prev_values[parents[1]];
-                value.* = Node.eval_(weights, a, b);
+                value.* = Node.eval(weights, a, b);
             }
         }
     }
@@ -181,8 +171,7 @@ pub const Network = struct {
         assert(y.len == last.len);
 
         net.eval(x);
-		for (net.layers) |layer| @memset(layer.items(.delta), 0);
-	
+        for (net.layers) |layer| @memset(layer.items(.delta), 0);
         // Compute the delta for the last layer.
         for (last.items(.delta), last.items(.value), y) |*delta, value, y_value| {
             // Fixme: Hardcoded gradient of the halved mean square error.
@@ -190,19 +179,19 @@ pub const Network = struct {
         }
         // Compute the delta of the previous layers, back to front.
         for (1..net.layers.len) |i| {
-        	const layer = net.layers[net.layers.len - i];
-        	const prev = net.layers[net.layers.len - i - 1];
-        	const prev_deltas = prev.items(.delta);
-        	const prev_values = prev.items(.value);
-        	for (0..layer.len) |child_index| {
-        		const child = layer.get(child_index);		
-        		const parents = child.parents;
-        		const a = prev_values[parents[0]];
-        		const b = prev_values[parents[1]];
-        		prev_deltas[parents[0]] += child.delta * child.del_a(b);
-        		prev_deltas[parents[1]] += child.delta * child.del_b(a);
-       		}
-   		}
+            const layer = net.layers[net.layers.len - i];
+            const prev = net.layers[net.layers.len - i - 1];
+            const prev_deltas = prev.items(.delta);
+            const prev_values = prev.items(.value);
+            for (0..layer.len) |child_index| {
+                const child = layer.get(child_index);
+                const parents = child.parents;
+                const a = prev_values[parents[0]];
+                const b = prev_values[parents[1]];
+                prev_deltas[parents[0]] += child.delta * child.del_a(b);
+                prev_deltas[parents[1]] += child.delta * child.del_b(a);
+            }
+        }
     }
 
     // Updates the gradient of the network for a given datapoint.
