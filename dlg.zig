@@ -217,7 +217,7 @@ pub const Network = struct {
     }
 
     /// Initializes a network with specified shape with random connections inbetween.
-    /// Each node is guaranteed to have at least one child.
+    /// Each node is guaranteed to have the same number of children modulo +-1.
     /// Note that shape[0] is the input dimension and shape[shape.len - 1] is the output dimension.
     pub fn initRandom(allocator: Allocator, shape: []const usize) !Network {
         // Shape must at least specify input and output dimensions.
@@ -226,6 +226,7 @@ pub const Network = struct {
         // this forces some nodes to have no children, which causes those nodes to become useless.
         for (shape[0 .. shape.len - 1], shape[1..]) |dim, next| {
             assert(next * 2 >= dim);
+            assert(dim > 0);
         }
 
         var prng = std.Random.DefaultPrng.init(blk: {
@@ -257,20 +258,23 @@ pub const Network = struct {
         }
 
         // Initialize node parents such that each node has at least one child, excluding the last layer.
+        // Moreover, the following scheme guarantees that the number of children each node has is
+        // uniformly distributed, i.e. every node has an equal number of children modulo +-1.
         var stack = try ArrayList(usize).initCapacity(allocator, std.mem.max(usize, shape));
         defer stack.deinit();
         for (net.layers, shape[0 .. shape.len - 1]) |layer, prev_dim| {
-            // Fill the stack with all possible indices of the previous layer in random order.
-            for (0..prev_dim) |i| stack.appendAssumeCapacity(i);
-            rand.shuffle(usize, stack.items);
-
             for (layer.items(.parents)) |*parents| {
-                const first = stack.pop() orelse rand.uintLessThan(usize, prev_dim);
-                const second = stack.pop() orelse while (true) {
-                    const i = rand.uintLessThan(usize, prev_dim);
-                    // Fixme: Will fail if dim == 1.
-                    if (i != first) break i;
-                } else unreachable;
+            	const first = if (stack.pop()) |index| index else refill: {
+		        // Fill the stack with all possible indices of the previous layer in random order.
+            		for (0..prev_dim) |i| stack.appendAssumeCapacity(i);	
+            		rand.shuffle(usize, stack.items);
+            		break :refill stack.pop().?;
+            	};
+            	const second = if (stack.pop()) |index| index else refill: {
+            		for (0..prev_dim) |i| stack.appendAssumeCapacity(i);	
+            		rand.shuffle(usize, stack.items);
+            		break :refill stack.pop().?;
+            	};
                 parents.* = .{ @truncate(first), @truncate(second) };
             }
         }
