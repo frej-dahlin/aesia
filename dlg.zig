@@ -181,28 +181,28 @@ pub const Network = struct {
         assert(y.len == last.len);
 
         net.eval(x);
-
+		for (net.layers) |layer| @memset(layer.items(.delta), 0);
+	
         // Compute the delta for the last layer.
         for (last.items(.delta), last.items(.value), y) |*delta, value, y_value| {
             // Fixme: Hardcoded gradient of the halved mean square error.
             delta.* = value - y_value;
         }
         // Compute the delta of the previous layers, back to front.
-        for (2..net.layers.len + 1) |i| {
-            const layer = net.layers[net.layers.len - i];
-            const after = net.layers[net.layers.len + 1 - i];
-            const values = layer.items(.value);
-            for (layer.items(.delta), layer.items(.children), 0..) |*delta, children, parent_index| {
-                delta.* = 0;
-                for (children) |child_index| {
-                    // Note: Benchmark unpacking single fields here instead of the entire child.
-                    const child = after.get(child_index);
-                    const a = values[child.parents[0]];
-                    const b = values[child.parents[1]];
-                    delta.* += child.delta * if (child.parents[0] == parent_index) child.del_a(b) else child.del_b(a);
-                }
-            }
-        }
+        for (1..net.layers.len) |i| {
+        	const layer = net.layers[net.layers.len - i];
+        	const prev = net.layers[net.layers.len - i - 1];
+        	const prev_deltas = prev.items(.delta);
+        	const prev_values = prev.items(.value);
+        	for (0..layer.len) |child_index| {
+        		const child = layer.get(child_index);		
+        		const parents = child.parents;
+        		const a = prev_values[parents[0]];
+        		const b = prev_values[parents[1]];
+        		prev_deltas[parents[0]] += child.delta * child.del_a(b);
+        		prev_deltas[parents[1]] += child.delta * child.del_b(a);
+       		}
+   		}
     }
 
     // Updates the gradient of the network for a given datapoint.
