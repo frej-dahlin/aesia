@@ -93,6 +93,8 @@ pub const Network = struct {
         children: []NodeIndex,
 
         weights: f32x16,
+        // The cached value softmax(weights).
+        sigma: f32x16, 
         // The gradient of the cost function with respect to the weights of the node.
         gradient: f32x16,
         // The current feedforward value.
@@ -104,23 +106,6 @@ pub const Network = struct {
         // Adam optimizer data.
         adam_v: f32x16,
         adam_m: f32x16,
-
-        // Returns the derivative of eval with respect to the first parent.
-        pub fn del_a(node: Node, b: f32) f32 {
-            const sigma = softmax(node.weights);
-            return @reduce(.Add, sigma * SoftGate.del_a(b));
-        }
-
-        // Returns the derivative of eval with respect to the second parent.
-        pub fn del_b(node: Node, a: f32) f32 {
-            const sigma = softmax(node.weights);
-            return @reduce(.Add, sigma * SoftGate.del_b(a));
-        }
-
-        pub fn eval(weights: f32x16, a: f32, b: f32) f32 {
-            const sigma = softmax(weights);
-            return @reduce(.Add, sigma * SoftGate.vector(a, b));
-        }
     };
 
     input_dim: usize,
@@ -143,20 +128,26 @@ pub const Network = struct {
         @setFloatMode(.optimized);
         assert(x.len == net.input_dim);
 
+		// Compute and cache the probability distribution.
+        for (net.layers) |layer| {
+                for (layer.items(.weights), layer.items(.sigma)) |weights, *sigma| {
+                        sigma.* = softmax(weights);
+                }
+        }
         // Evaluate the network, layer by layer.
         // Note: Two for loops is faster than a single with a branch.
         const first = net.layers[0];
-        for (first.items(.value), first.items(.parents), first.items(.weights)) |*value, parents, weights| {
+        for (first.items(.value), first.items(.parents), first.items(.sigma)) |*value, parents, sigma| {
             const a = x[parents[0]];
             const b = x[parents[1]];
-            value.* = Node.eval(weights, a, b);
+            value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
         }
         for (net.layers[1..], net.layers[0 .. net.layers.len - 1]) |layer, prev| {
             const prev_values = prev.items(.value);
-            for (layer.items(.value), layer.items(.parents), layer.items(.weights)) |*value, parents, weights| {
+            for (layer.items(.value), layer.items(.parents), layer.items(.sigma)) |*value, parents, sigma| {
                 const a = prev_values[parents[0]];
                 const b = prev_values[parents[1]];
-                value.* = Node.eval(weights, a, b);
+            	value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
             }
         }
     }
@@ -188,8 +179,8 @@ pub const Network = struct {
                 const parents = child.parents;
                 const a = prev_values[parents[0]];
                 const b = prev_values[parents[1]];
-                prev_deltas[parents[0]] += child.delta * child.del_a(b);
-                prev_deltas[parents[1]] += child.delta * child.del_b(a);
+                prev_deltas[parents[0]] += child.delta * @reduce(.Add, child.sigma * SoftGate.del_a(b));
+                prev_deltas[parents[1]] += child.delta * @reduce(.Add, child.sigma * SoftGate.del_b(a));
             }
         }
     }
@@ -209,11 +200,10 @@ pub const Network = struct {
         for (net.layers, 0..) |layer, i| {
             // This branch does not have a huge impact, but consider splitting into two loops.
             const prev_values = if (i == 0) x else net.layers[i - 1].items(.value);
-            for (layer.items(.parents), layer.items(.weights), layer.items(.gradient), layer.items(.delta)) |parents, weights, *gradient, delta| {
+            for (layer.items(.parents), layer.items(.sigma), layer.items(.gradient), layer.items(.delta)) |parents, sigma, *gradient, delta| {
                 const a = prev_values[parents[0]];
                 const b = prev_values[parents[1]];
                 const gate = SoftGate.vector(a, b);
-                const sigma = softmax(weights);
                 const value = @reduce(.Add, sigma * gate);
                 gradient.* += @as(f32x16, @splat(tau * delta)) * sigma * (gate - @as(f32x16, @splat(value)));
             }
