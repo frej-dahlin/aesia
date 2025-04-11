@@ -11,7 +11,7 @@ pub fn main() !void {
     });
     const rand = prng.random();
 
-    const net = try dlg.Network.initRandom(ally, &[_]usize{ 16, 512, 256, 128, 64, 32, 16, 8 });
+    const net = try dlg.Network.initRandom(ally, &[_]usize{ 16, 256, 128, 64, 32, 16, 8});
     for (net.layers) |layer| {
     	@memset(layer.items(.adam_m), [_]f32{0} ** 16);
     	@memset(layer.items(.adam_v), [_]f32{0} ** 16);
@@ -58,18 +58,18 @@ pub fn main() !void {
         }
         for (net.layers) |layer| {
             for (layer.items(.weights), layer.items(.gradient), layer.items(.adam_m), layer.items(.adam_v)) |*weights, gradient, *m, *v| {
-                const denom: f32 = 1;
-                m.* = @as(dlg.v16f32, @splat(beta_1)) * m.* +
-                    @as(dlg.v16f32, @splat((1 - beta_1) / denom)) * gradient;
-                v.* = @as(dlg.v16f32, @splat(beta_2)) * v.* +
-                    @as(dlg.v16f32, @splat((1 - beta_2) / denom / denom)) * gradient * gradient;
-                const m_hat = m.* / @as(dlg.v16f32, @splat(1 - beta_1));
-                const v_hat = v.* / @as(dlg.v16f32, @splat(1 - beta_2));
-                weights.* -= @as(dlg.v16f32, @splat(learn_rate)) *
-	                m_hat / (@sqrt(v_hat) + @as(dlg.v16f32, @splat(epsilon)));
+                const denom: f32 = batch_size;
+                m.* = @as(dlg.f32x16, @splat(beta_1)) * m.* +
+                    @as(dlg.f32x16, @splat((1 - beta_1) / denom)) * gradient;
+                v.* = @as(dlg.f32x16, @splat(beta_2)) * v.* +
+                    @as(dlg.f32x16, @splat((1 - beta_2) / denom / denom)) * gradient * gradient;
+                const m_hat = m.* / @as(dlg.f32x16, @splat(1 - beta_1));
+                const v_hat = v.* / @as(dlg.f32x16, @splat(1 - beta_2));
+                weights.* -= @as(dlg.f32x16, @splat(learn_rate)) *
+	                m_hat / (@sqrt(v_hat) + @as(dlg.f32x16, @splat(epsilon)));
             }
         }
-        if (niter % 1000 == 0) std.debug.print("{d}\n", .{mse});
+        if (niter % (1000 / batch_size) == 0) std.debug.print("{d}\n", .{mse});
     }
     net.deinit(ally);
 }
