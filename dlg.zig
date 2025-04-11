@@ -165,6 +165,8 @@ pub fn Network(options: NetworkOptions) type {
             children: []NodeIndex,
 
             weights: f32x16,
+            // Cached probability distribution.
+            sigma: f32x16,
             // The gradient of the cost function with respect to the weights of the node.
             gradient: f32x16,
             // The current feedforward value.
@@ -215,21 +217,26 @@ pub fn Network(options: NetworkOptions) type {
             @setFloatMode(.optimized);
             assert(x.len == InputLayer.dim);
 
+			for (net.logic_layers) |layer| {
+				for (layer.items(.weights), layer.items(.sigma)) |weights, *sigma| {
+					sigma.* = softmax(weights);
+				}
+			}
             // Evaluate the network, layer by layer.
             // Note: Two for loops is faster than a single with a branch.
             net.input_layer.eval(x);
             const first = net.logic_layers[0];
-            for (first.items(.value), first.items(.parents), first.items(.weights)) |*value, parents, weights| {
+            for (first.items(.value), first.items(.parents), first.items(.sigma)) |*value, parents, sigma| {
                 const a = net.input_layer.values()[parents[0]];
                 const b = net.input_layer.values()[parents[1]];
-                value.* = Node.eval(weights, a, b);
+                value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
             }
             for (net.logic_layers[1..], net.logic_layers[0 .. net.logic_layers.len - 1]) |layer, prev| {
                 const prev_values = prev.items(.value);
-                for (layer.items(.value), layer.items(.parents), layer.items(.weights)) |*value, parents, weights| {
+                for (layer.items(.value), layer.items(.parents), layer.items(.sigma)) |*value, parents, sigma| {
                     const a = prev_values[parents[0]];
                     const b = prev_values[parents[1]];
-                    value.* = Node.eval(weights, a, b);
+	                value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
                 }
             }
         }
@@ -258,8 +265,8 @@ pub fn Network(options: NetworkOptions) type {
                     const parents = child.parents;
                     const a = prev_values[parents[0]];
                     const b = prev_values[parents[1]];
-                    prev_deltas[parents[0]] += child.delta * child.del_a(b);
-                    prev_deltas[parents[1]] += child.delta * child.del_b(a);
+                    prev_deltas[parents[0]] += child.delta * @reduce(.Add, child.sigma * SoftGate.del_a(b));
+                    prev_deltas[parents[1]] += child.delta * @reduce(.Add, child.sigma * SoftGate.del_b(a));
                 }
             }
         }
@@ -278,11 +285,10 @@ pub fn Network(options: NetworkOptions) type {
 
             for (net.logic_layers, 0..) |layer, i| {
                 const prev_values = if (i == 0) net.input_layer.values() else net.logic_layers[i - 1].items(.value);
-                for (layer.items(.parents), layer.items(.weights), layer.items(.gradient), layer.items(.delta)) |parents, weights, *gradient, delta| {
+                for (layer.items(.parents), layer.items(.sigma), layer.items(.gradient), layer.items(.delta)) |parents, sigma, *gradient, delta| {
                     const a = prev_values[parents[0]];
                     const b = prev_values[parents[1]];
                     const gate = SoftGate.vector(a, b);
-                    const sigma = softmax(weights);
                     const value = @reduce(.Add, sigma * gate);
                     gradient.* += @as(f32x16, @splat(tau * delta)) * sigma * (gate - @as(f32x16, @splat(value)));
                 }
