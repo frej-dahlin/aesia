@@ -12,7 +12,7 @@ pub const f32x16 = @Vector(16, f32);
 const SoftGate = struct {
     /// Returns a vector containg representing all values of a soft logic gate.
     pub fn vector(a: f32, b: f32) f32x16 {
-    	@setFloatMode(.optimized);
+        @setFloatMode(.optimized);
         return .{
             0,
             a * b,
@@ -33,10 +33,10 @@ const SoftGate = struct {
         };
     }
 
-    /// Returns a the soft gate vector differentiated by the first variable.
-    /// Note that it only depends on the second.
+    /// Returns the soft gate vector differentiated by the first variable.
+    /// Note that it only depends on the second variable.
     pub fn del_a(b: f32) f32x16 {
-    	@setFloatMode(.optimized);
+        @setFloatMode(.optimized);
         return .{
             0,
             b,
@@ -57,8 +57,10 @@ const SoftGate = struct {
         };
     }
 
+    /// Returns the soft gate vector differentiated by the second variable.
+    /// Note that it only depends on the first variable.
     pub fn del_b(a: f32) f32x16 {
-    	@setFloatMode(.optimized);
+        @setFloatMode(.optimized);
         return .{
             0,
             a,
@@ -80,17 +82,13 @@ const SoftGate = struct {
     }
 };
 
-
 // Fixme: Make float type an optional parameter.
 pub const Network = struct {
-    // Indices into the nodes slice.
-    const NodeIndex = u32;
+    // Relative indices into each layer.
+    const NodeIndex = u16;
     // Currently the graph is stored as a list of lists.
     // Consider using a compressed sparse row format instead.
     const Node = struct {
-        // Note: One can make these relative to each layer; this will save memory.
-        // For example if each layer at most has 60_000 nodes, then u16 suffices
-        // as a relative index type.
         parents: [2]NodeIndex,
         children: []NodeIndex,
 
@@ -137,25 +135,25 @@ pub const Network = struct {
 
     input_dim: usize,
     layers: []MultiArrayList(Node).Slice,
-    
+
     // Note: This is the hottest part of the code, I *think* that AVX-512 should handle it with gusto,
     // but testing is required. Consider caching the result, this can be a compile time option.
-	pub fn softmax(w: f32x16) f32x16 {
-	    @setFloatMode(.optimized);
-	    const sigma = @exp2(w);
-	    const denom = @reduce(.Add, sigma);
-	    return sigma / @as(f32x16, @splat(denom));
-	}
-	
+    pub fn softmax(w: f32x16) f32x16 {
+        @setFloatMode(.optimized);
+        const sigma = @exp2(w);
+        const denom = @reduce(.Add, sigma);
+        return sigma / @as(f32x16, @splat(denom));
+    }
+    
     pub fn lastLayer(net: Network) MultiArrayList(Node).Slice {
         return net.layers[net.layers.len - 1];
     }
 
     pub fn eval(net: Network, x: []const f32) void {
-    	@setFloatMode(.optimized);
+        @setFloatMode(.optimized);
         assert(x.len == net.input_dim);
 
-	// Note: Two for loops is faster than a single with a branch.
+        // Note: Two for loops is faster than a single with a branch.
         const first = net.layers[0];
         for (first.items(.value), first.items(.parents), first.items(.weights)) |*value, parents, weights| {
             const a = x[parents[0]];
@@ -172,12 +170,12 @@ pub const Network = struct {
             }
         }
     }
-    
+
     // Compute the delta for each node relative to a given datapoint.
     // See the definition of the Node struct.
     // Fixme: Currently assumes the network is trained with a halved mean square error.
     pub fn backprop(net: Network, x: []const f32, y: []const f32) void {
-    	@setFloatMode(.optimized);
+        @setFloatMode(.optimized);
         const last = net.lastLayer();
         assert(x.len == net.input_dim);
         assert(y.len == last.len);
@@ -203,12 +201,6 @@ pub const Network = struct {
                     const b = values[child.parents[1]];
                     delta.* += child.delta * if (child.parents[0] == parent_index) child.del_a(b) else child.del_b(a);
                 }
-                
-                for (children) |child_index| {
-                	const parents = after.items(.parents)[child_index];
-                	const delta = after.items(.delta)[child_index];
-                	
-                }
             }
         }
     }
@@ -217,11 +209,12 @@ pub const Network = struct {
     // Fixme: Now the gradient of softmax is hardcoded.
     // Fixme: Move the inner 2 for loops to a separate function.
     pub fn update_gradient(net: Network, x: []const f32, y: []const f32) void {
-    	@setFloatMode(.optimized);
+        @setFloatMode(.optimized);
         assert(x.len == net.input_dim);
         assert(y.len == net.lastLayer().len);
 
         net.backprop(x, y);
+        // Compensating factor for using base 2 instead of e in softmax.
         const tau = @log(2.0);
 
         for (net.layers, 0..) |layer, i| {
@@ -284,13 +277,13 @@ pub const Network = struct {
             @memset(layer.items(.adam_v), [_]f32{0} ** 16);
         }
 
-	    // Initialize node parents such that each node has at least one child, excluding the last layer.
+        // Initialize node parents such that each node has at least one child, excluding the last layer.
         var stack = try ArrayList(usize).initCapacity(allocator, std.mem.max(usize, shape));
         defer stack.deinit();
-        for (net.layers, shape[0..shape.len - 1]) |layer, prev_dim| {
+        for (net.layers, shape[0 .. shape.len - 1]) |layer, prev_dim| {
             // Fill the stack with all possible indices of the previous layer in random order.
-       	    for (0..prev_dim) |i| stack.appendAssumeCapacity(i);
-	    rand.shuffle(usize, stack.items);
+            for (0..prev_dim) |i| stack.appendAssumeCapacity(i);
+            rand.shuffle(usize, stack.items);
 
             for (layer.items(.parents)) |*parents| {
                 const first = stack.pop() orelse rand.uintLessThan(usize, prev_dim);
@@ -313,26 +306,26 @@ pub const Network = struct {
                 children.* = try buffer.toOwnedSlice();
             }
         }
-        
+
         // Assert parent indices and that every node has at least one child excepting the ones in the last layer.
-        for (net.layers, shape[0..shape.len - 1], shape[1..], 0..) |layer, dim_prev, dim_next, i| {
-        	for (layer.items(.parents), layer.items(.children)) |parents, children| {
-        		assert(parents[0] < dim_prev);
-        		assert(parents[1] < dim_prev);
-        		assert(children.len > 0 or i == net.layers.len - 1);
-        		for (children) |child_index| assert(child_index < dim_next);
-        	}
+        for (net.layers, shape[0 .. shape.len - 1], shape[1..], 0..) |layer, dim_prev, dim_next, i| {
+            for (layer.items(.parents), layer.items(.children)) |parents, children| {
+                assert(parents[0] < dim_prev);
+                assert(parents[1] < dim_prev);
+                assert(children.len > 0 or i == net.layers.len - 1);
+                for (children) |child_index| assert(child_index < dim_next);
+            }
         }
         // Assert child indices.
         for (net.layers[0 .. net.layers.len - 1], net.layers[1..]) |layer, next| {
-        	for (layer.items(.children), 0..) |children, parent_index| {
-        		for (children) |child_index| {
-        			const parents = next.items(.parents)[child_index];
-        			assert(parents[0] == parent_index or parents[1] == parent_index);
-        		}
-        	}
+            for (layer.items(.children), 0..) |children, parent_index| {
+                for (children) |child_index| {
+                    const parents = next.items(.parents)[child_index];
+                    assert(parents[0] == parent_index or parents[1] == parent_index);
+                }
+            }
         }
-        
+
         return net;
     }
 };
