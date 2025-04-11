@@ -87,7 +87,7 @@ pub fn InputRelaxBits(bit_count: usize) type {
         const Self = @This();
         const dim = bit_count;
         const InputType = [dim]bool;
-        data: [dim]f32 = [_]f32{0} ** 16,
+        data: [dim]f32 = [_]f32{0} ** dim,
 
         // Fixme: Use SIMD.
         pub fn eval(self: *Self, x: InputType) void {
