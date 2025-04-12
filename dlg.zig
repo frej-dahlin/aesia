@@ -217,11 +217,6 @@ pub fn Network(options: NetworkOptions) type {
             @setFloatMode(.optimized);
             assert(x.len == InputLayer.dim);
 
-            //for (net.logic_layers) |layer| {
-            //for (layer.items(.weights), layer.items(.sigma)) |weights, *sigma| {
-            //sigma.* = softmax(weights);
-            //}
-            //}
             // Evaluate the network, layer by layer.
             // Note: Two for loops is faster than a single with a branch.
             net.input_layer.eval(x);
