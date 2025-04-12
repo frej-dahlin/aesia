@@ -217,26 +217,28 @@ pub fn Network(options: NetworkOptions) type {
             @setFloatMode(.optimized);
             assert(x.len == InputLayer.dim);
 
-			for (net.logic_layers) |layer| {
-				for (layer.items(.weights), layer.items(.sigma)) |weights, *sigma| {
-					sigma.* = softmax(weights);
-				}
-			}
+            //for (net.logic_layers) |layer| {
+            //for (layer.items(.weights), layer.items(.sigma)) |weights, *sigma| {
+            //sigma.* = softmax(weights);
+            //}
+            //}
             // Evaluate the network, layer by layer.
             // Note: Two for loops is faster than a single with a branch.
             net.input_layer.eval(x);
             const first = net.logic_layers[0];
-            for (first.items(.value), first.items(.parents), first.items(.sigma)) |*value, parents, sigma| {
+            for (first.items(.value), first.items(.weights), first.items(.parents), first.items(.sigma)) |*value, weights, parents, *sigma| {
                 const a = net.input_layer.values()[parents[0]];
                 const b = net.input_layer.values()[parents[1]];
-                value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
+                sigma.* = softmax(weights);
+                value.* = @reduce(.Add, sigma.* * SoftGate.vector(a, b));
             }
             for (net.logic_layers[1..], net.logic_layers[0 .. net.logic_layers.len - 1]) |layer, prev| {
                 const prev_values = prev.items(.value);
-                for (layer.items(.value), layer.items(.parents), layer.items(.sigma)) |*value, parents, sigma| {
+                for (layer.items(.value), layer.items(.weights), layer.items(.parents), layer.items(.sigma)) |*value, weights, parents, *sigma| {
                     const a = prev_values[parents[0]];
                     const b = prev_values[parents[1]];
-	                value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
+                    sigma.* = softmax(weights);
+                    value.* = @reduce(.Add, sigma.* * SoftGate.vector(a, b));
                 }
             }
         }
