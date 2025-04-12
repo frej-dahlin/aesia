@@ -118,29 +118,30 @@ pub fn InputIdentity(_dim: usize) type {
     };
 }
 
+pub fn HalvedMeanSquareError(dim: usize) type {
+	return struct {
+		pub fn eval(y_pred: *const [dim]f32, y_real: *const [dim]f32) f32 {
+	        assert(y_pred.len == y_real.len);
+	        var result: f32 = 0;
+	        inline for (y_pred, y_real) |pred, real| result += (pred - real) * (pred - real);
+	        return result / 2;
+	    }
+
+		pub fn gradient(y_pred: *const [dim]f32, y_real: *const [dim]f32, out: *[dim]f32) void {
+	        assert(y_pred.len == y_real.len and y_real.len == out.len);
+	        for (y_pred, y_real, out) |pred, real, *o| o.* = pred - real;
+	    }
+    };
+}
+
 // Fixme: Add FloatType as a field.
+// Fixme: Make float type an optional parameter.
 pub const NetworkOptions = struct {
     shape: []const usize,
     InputLayer: ?fn (usize) type = null,
     Cost: ?type = null,
 };
 
-pub const HalvedMeanSquareError = struct {
-    pub fn eval(y_pred: []const f32, y_real: []const f32) f32 {
-        assert(y_pred.len == y_real.len);
-        var result: f32 = 0;
-        for (y_pred, y_real) |pred, real| result += (pred - real) * (pred - real);
-        return result / 2;
-    }
-
-    pub fn gradient(y_pred: []const f32, y_real: []const f32, out: []f32) void {
-        assert(y_pred.len == y_real.len and y_real.len == out.len);
-        for (y_pred, y_real, out) |pred, real, *o| o.* = pred - real;
-    }
-};
-
-// Fixme: The structure of the network is compile-time known, in principle everything is static, utilize this!
-// Fixme: Make float type an optional parameter.
 pub fn Network(options: NetworkOptions) type {
     const shape = options.shape;
     // Assert validity of the shape array.
@@ -151,12 +152,13 @@ pub fn Network(options: NetworkOptions) type {
     }
     const node_count = blk: {
         var result: usize = 0;
-        for (shape[1 .. shape.len - 1]) |dim| result += dim;
+        inline for (shape[1 .. shape.len]) |dim| result += dim;
         break :blk result;
     };
     // Unpack options.
     const InputLayer = if (options.InputLayer) |IL| IL(shape[0]) else InputIdentity(shape[0]);
-    const Cost = if (options.Cost) |C| C else HalvedMeanSquareError;
+    const output_dim = shape[shape.len - 1];
+    const Cost = if (options.Cost) |C| C else HalvedMeanSquareError(output_dim);
 
     return struct {
         const Self = @This();
@@ -170,8 +172,6 @@ pub fn Network(options: NetworkOptions) type {
         // Note: Consider creating a static version of MultiArrayList 'MultiArray' for flexibility and elegance.
         const Nodes = struct {
             parents: [node_count][2]NodeIndex,
-            // Fixme: Store these in a CSR format whose size is statically computed.
-            children: [node_count][]NodeIndex,
 
             logits: [node_count]f32x16,
             // Cached value of softmax(logit).
@@ -186,7 +186,6 @@ pub fn Network(options: NetworkOptions) type {
         };
         const Node = struct {
             parents: [2]NodeIndex,
-            children: []NodeIndex,
 
             logits: f32x16,
             // Cached probability distribution.
@@ -204,6 +203,7 @@ pub fn Network(options: NetworkOptions) type {
             adam_m: f32x16,
         };
 
+	nodes: Nodes,
         input_layer: InputLayer,
 
         // Note: This is the hottest part of the code, I *think* that AVX-512 should handle it with gusto,
@@ -215,29 +215,28 @@ pub fn Network(options: NetworkOptions) type {
             return sigma / @as(f32x16, @splat(denom));
         }
 
-        pub fn lastLayer(net: Self) MultiArrayList(Node).Slice {
-            return net.logic_layers[net.logic_layers.len - 1];
-        }
-
         pub fn eval(net: *Self, x: InputLayer.InputType) void {
             @setFloatMode(.optimized);
             assert(x.len == InputLayer.dim);
 
+            @setEvalBranchQuota(4 * node_count);
             // Compute and cache the probability distribution.
             const nodes = &net.nodes;
-            inline for (nodes.sigma, nodes.logits) |*sigma, logits| sigma.* = softmax(logits);
+            for (&nodes.sigma, nodes.logits) |*sigma, logits| sigma.* = softmax(logits);
+            // Gotta go fast?!
+            // Fixme: benchmark inlining.
             // Evaluate the network, layer by layer.
             // Note: Two for loops is faster than a single with a branch.
             net.input_layer.eval(x);
            	const input_values = net.input_layer.values();
-            inline for (nodes.values[0..shape[1]], nodes.parents[0..shape[1]], nodes.sigma[0..shape[1]]) |*value, parents, sigma| {
+            for (nodes.value[0..shape[1]], nodes.parents[0..shape[1]], nodes.sigma[0..shape[1]]) |*value, parents, sigma| {
             	const a = input_values[parents[0]];
             	const b = input_values[parents[1]];
             	value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
             }
-            inline for (nodes.values[shape[1]..], nodes.parents[shape[1]..], nodes.sigma[shape[1]..]) |*value, parents, sigma| {
-            	const a = nodes.values[parents[0]];
-            	const b = nodes.values[parents[1]];
+            for (nodes.value[shape[1]..], nodes.parents[shape[1]..], nodes.sigma[shape[1]..]) |*value, parents, sigma| {
+            	const a = nodes.value[parents[0]];
+            	const b = nodes.value[parents[1]];
             	value.* = @reduce(.Add, sigma * SoftGate.vector(a, b));
            	}
         }
@@ -245,60 +244,50 @@ pub fn Network(options: NetworkOptions) type {
         // Compute the delta for each node relative to a given datapoint.
         // See the definition of the Node struct.
         // Fixme: Currently assumes the network is trained with a halved mean square error.
-        pub fn backprop(net: *Self, x: InputLayer.InputType, y: []const f32) void {
+        pub fn backprop(net: *Self, x: InputLayer.InputType, y: *const [output_dim]f32) void {
             @setFloatMode(.optimized);
-            const last = net.lastLayer();
             assert(x.len == InputLayer.dim);
-            assert(y.len == last.len);
+            assert(y.len == output_dim);
 
             net.eval(x);
             @memset(&net.nodes.delta, 0);
-            //Cost.gradient(net.nodes.delta[node_count -
             // Compute the delta for the last layer.
-            Cost.gradient(last.items(.value), y, last.items(.delta));
-            // Compute the delta of the previous layers, back to front.
-            for (1..net.logic_layers.len) |i| {
-                const layer = net.logic_layers[net.logic_layers.len - i];
-                const prev = net.logic_layers[net.logic_layers.len - i - 1];
-                const prev_deltas = prev.items(.delta);
-                const prev_values = prev.items(.value);
-                for (0..layer.len) |child_index| {
-                    const child = layer.get(child_index);
-                    const parents = child.parents;
-                    const a = prev_values[parents[0]];
-                    const b = prev_values[parents[1]];
-                    prev_deltas[parents[0]] += child.delta * @reduce(.Add, child.sigma * SoftGate.del_a(b));
-                    prev_deltas[parents[1]] += child.delta * @reduce(.Add, child.sigma * SoftGate.del_b(a));
-                }
+            Cost.gradient(net.nodes.value[node_count - output_dim..], y, net.nodes.delta[node_count - output_dim..]);
+            for (1..node_count + 1 - shape[1]) |i| {
+            	const index = node_count - i;
+            	const parents = net.nodes.parents[index];
+            	const delta = net.nodes.delta[index];
+            	const sigma = net.nodes.sigma[index];
+            	const a = net.nodes.value[parents[0]];
+            	const b = net.nodes.value[parents[1]];
+            	net.nodes.delta[parents[0]] += delta * @reduce(.Add, sigma * SoftGate.del_a(b));
+            	net.nodes.delta[parents[1]] += delta * @reduce(.Add, sigma * SoftGate.del_b(a));
             }
         }
 
         // Updates the gradient of the network for a given datapoint.
         // Fixme: Now the gradient of softmax is hardcoded.
         // Fixme: Move the inner 2 for loops to a separate function.
-        pub fn update_gradient(net: *Self, x: InputLayer.InputType, y: []const f32) void {
+        pub fn update_gradient(net: *Self, x: InputLayer.InputType, y: *const [output_dim]f32) void {
             @setFloatMode(.optimized);
             assert(x.len == InputLayer.dim);
-            assert(y.len == net.lastLayer().len);
+            assert(y.len == output_dim);
 
             net.backprop(x, y);
             // Compensating factor for using base 2 instead of e in softmax.
             const tau = @log(2.0);
 
-            for (net.logic_layers, 0..) |layer, i| {
-                const prev_values = if (i == 0) net.input_layer.values() else net.logic_layers[i - 1].items(.value);
-                for (layer.items(.parents), layer.items(.sigma), layer.items(.gradient), layer.items(.delta)) |parents, sigma, *gradient, delta| {
-                    const a = prev_values[parents[0]];
-                    const b = prev_values[parents[1]];
-                    const gate = SoftGate.vector(a, b);
-                    const value = @reduce(.Add, sigma * gate);
-                    gradient.* += @as(f32x16, @splat(tau * delta)) * sigma * (gate - @as(f32x16, @splat(value)));
-                }
-            }
+			const nodes = &net.nodes;
+			for (&nodes.gradient, nodes.parents, nodes.sigma, nodes.delta) |*gradient, parents, sigma, delta| {
+				const a = nodes.value[parents[0]];	
+				const b = nodes.value[parents[1]];	
+				const gate = SoftGate.vector(a, b);
+				const value = @reduce(.Add, sigma * gate);
+                gradient.* += @as(f32x16, @splat(tau * delta)) * sigma * (gate - @as(f32x16, @splat(value)));
+			}
         }
 
         pub fn deinit(net: Self, allocator: Allocator) void {
-            for (net.nodes) |node| allocator.free(node.children);
             allocator.free(net.nodes);
             allocator.free(net.shape);
         }
@@ -325,66 +314,38 @@ pub fn Network(options: NetworkOptions) type {
             const rand = prng.random();
 
             var net: Self = undefined;
-            net.input_layer = .{};
 
             // Initialize nodes.
             // Initialize logits to be biased toward the pass through gates.
             @memset(&net.nodes.logits, [_]f32{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10);
-            @memset(&net.nodes.gradient, 0);
-            @memset(&net.nodes.children, &.{});
+            @memset(&net.nodes.gradient, [_]f32{0} ** 16);
             
             // Initialize node parents such that each node has at least one child, excluding the last layer.
             // Moreover, the following scheme guarantees that the number of children each node has is
             // uniformly distributed, i.e. every node has an equal number of children modulo +-1.
-            // Fixme: Statically allocate the children arrays somehow.
             var stack = try ArrayList(usize).initCapacity(allocator, std.mem.max(usize, shape));
             defer stack.deinit();
-            for (net.logic_layers, shape[0 .. shape.len - 1]) |layer, prev_dim| {
-                for (layer.items(.parents)) |*parents| {
-                    const first = if (stack.pop()) |index| index else refill: {
-                        // Fill the stack with all possible indices of the previous layer in random order.
-                        for (0..prev_dim) |i| stack.appendAssumeCapacity(i);
-                        rand.shuffle(usize, stack.items);
-                        break :refill stack.pop().?;
-                    };
-                    const second = if (stack.pop()) |index| index else refill: {
-                        for (0..prev_dim) |i| stack.appendAssumeCapacity(i);
-                        rand.shuffle(usize, stack.items);
-                        break :refill stack.pop().?;
-                    };
-                    parents.* = .{ @truncate(first), @truncate(second) };
-                }
+            var offset: usize = 0;
+            for (shape[1..], shape[0..shape.len - 1], 0..) |dim, prev, j| {
+            	const from = offset;
+            	const to = offset + dim;
+            	for (net.nodes.parents[from..to]) |*parents| {
+            		const first = if (stack.pop()) |index| index else refill: {
+            			for (0..prev) |i| stack.appendAssumeCapacity(i);
+            			rand.shuffle(usize, stack.items);
+            			break :refill stack.pop().?;
+            		};
+            		const second = if (stack.pop()) |index| index else refill: {
+            			for (0..prev) |i| stack.appendAssumeCapacity(i);
+            			rand.shuffle(usize, stack.items);
+            			break :refill stack.pop().?;
+            		};
+            		parents.* = if (j == 0) .{@truncate(first), @truncate(second)} else 
+            			.{@truncate(offset - prev + first), @truncate(offset - prev + second)};
+            	}
+            	offset = to;
             }
-            // Find the children of each node.
-            var buffer = ArrayList(NodeIndex).init(allocator);
-            defer buffer.deinit();
-            for (net.logic_layers[0 .. net.logic_layers.len - 1], net.logic_layers[1..]) |*layer, next| {
-                for (layer.items(.children), 0..) |*children, parent_index| {
-                    for (next.items(.parents), 0..) |parents, child_index| {
-                        if (parents[0] == parent_index or parents[1] == parent_index) try buffer.append(@truncate(child_index));
-                    }
-                    children.* = try buffer.toOwnedSlice();
-                }
-            }
-
-            // Assert parent indices and that every node has at least one child excepting the ones in the last layer.
-            for (net.logic_layers, shape[0 .. shape.len - 1], shape[1..], 0..) |layer, dim_prev, dim_next, i| {
-                for (layer.items(.parents), layer.items(.children)) |parents, children| {
-                    assert(parents[0] < dim_prev);
-                    assert(parents[1] < dim_prev);
-                    assert(children.len > 0 or i == net.logic_layers.len - 1);
-                    for (children) |child_index| assert(child_index < dim_next);
-                }
-            }
-            // Assert child indices.
-            for (net.logic_layers[0 .. net.logic_layers.len - 1], net.logic_layers[1..]) |layer, next| {
-                for (layer.items(.children), 0..) |children, parent_index| {
-                    for (children) |child_index| {
-                        const parents = next.items(.parents)[child_index];
-                        assert(parents[0] == parent_index or parents[1] == parent_index);
-                    }
-                }
-            }
+            @memset(&net.nodes.parents, .{0, 0});
 
             return net;
         }
