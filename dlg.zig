@@ -149,6 +149,11 @@ pub fn Network(options: NetworkOptions) type {
     for (shape[0 .. shape.len - 1], shape[1..]) |dim, next| {
         if (2 * next < dim) @compileError("options.shape: not allowed to shrink dimensions by factor > 2");
     }
+    const node_count = blk: {
+	   	var result: usize = 0;
+	   	for (shape[1..shape.len - 1]) |dim| result += dim;
+   	break :blk result;
+    };
     // Unpack options.
     const InputLayer = if (options.InputLayer) |IL| IL(shape[0]) else InputIdentity(shape[0]);
     const Cost = if (options.Cost) |C| C else HalvedMeanSquareError;
@@ -156,10 +161,31 @@ pub fn Network(options: NetworkOptions) type {
     return struct {
         const Self = @This();
 
-        // Relative indices into each layer.
-        const NodeIndex = u16;
+		// Fixme: For simplicity these are currently *global* indices, but using an array of offsets or similar,
+		// one can contract these into a much smaller type.
+        const NodeIndex = u32;
         // Currently the graph is stored as a list of lists.
         // Consider using a compressed sparse row format instead.
+       	// We use a struct of arrays for cache efficiency, for example eval never touches the delta and gradient. 
+       	// Note: Consider creating a static version of MultiArrayList 'MultiArray' for flexibility and elegance.
+       	const Nodes = struct {
+       		parents: [node_count][2]NodeIndex,
+       		// Cached values for the parents.
+       		parent_values: [node_count][2]f32,
+       		// Fixme: Store these in a CSR format whose size is statically computed.
+       		children: [node_count][]NodeIndex,
+       		
+       		logits: [node_count]f32x16,
+       		// Cached value of softmax(logit).
+       		sigma: [node_count]f32x16,
+       		// The gradient of the cost function with respect to the logit of the node.
+       		gradient: [node_count]f32x16,
+       		// The current feedforward value.
+       		value: [node_count]f32,
+            // Used for backpropagation, defined as dC/dvalue,
+            // where C is the cost function. This in turn is used to compute the gradient.
+            delta: [node_count]f32,
+       	};
         const Node = struct {
             parents: [2]NodeIndex,
             children: []NodeIndex,
@@ -178,23 +204,6 @@ pub fn Network(options: NetworkOptions) type {
             // Adam optimizer data.
             adam_v: f32x16,
             adam_m: f32x16,
-
-            // Returns the derivative of eval with respect to the first parent.
-            pub fn del_a(node: Node, b: f32) f32 {
-                const sigma = softmax(node.weights);
-                return @reduce(.Add, sigma * SoftGate.del_a(b));
-            }
-
-            // Returns the derivative of eval with respect to the second parent.
-            pub fn del_b(node: Node, a: f32) f32 {
-                const sigma = softmax(node.weights);
-                return @reduce(.Add, sigma * SoftGate.del_b(a));
-            }
-
-            pub fn eval(weights: f32x16, a: f32, b: f32) f32 {
-                const sigma = softmax(weights);
-                return @reduce(.Add, sigma * SoftGate.vector(a, b));
-            }
         };
 
         input_layer: InputLayer,
@@ -216,6 +225,10 @@ pub fn Network(options: NetworkOptions) type {
         pub fn eval(net: *Self, x: InputLayer.InputType) void {
             @setFloatMode(.optimized);
             assert(x.len == InputLayer.dim);
+            
+           	// Compute and cache the probability distribution. 
+            const nodes = &net.nodes;
+            for (nodes.sigma, nodes.logits) |*sigma, logits| sigma.* = softmax(logits);
 
 			for (net.logic_layers) |layer| {
 				for (layer.items(.weights), layer.items(.sigma)) |weights, *sigma| {
@@ -251,7 +264,8 @@ pub fn Network(options: NetworkOptions) type {
             assert(y.len == last.len);
 
             net.eval(x);
-            for (net.logic_layers) |layer| @memset(layer.items(.delta), 0);
+            @memset(&net.nodes.delta, 0);
+            Cost.gradient(net.nodes.delta[node_count - 
             // Compute the delta for the last layer.
             Cost.gradient(last.items(.value), y, last.items(.delta));
             // Compute the delta of the previous layers, back to front.
@@ -282,7 +296,7 @@ pub fn Network(options: NetworkOptions) type {
             net.backprop(x, y);
             // Compensating factor for using base 2 instead of e in softmax.
             const tau = @log(2.0);
-
+            
             for (net.logic_layers, 0..) |layer, i| {
                 const prev_values = if (i == 0) net.input_layer.values() else net.logic_layers[i - 1].items(.value);
                 for (layer.items(.parents), layer.items(.sigma), layer.items(.gradient), layer.items(.delta)) |parents, sigma, *gradient, delta| {
