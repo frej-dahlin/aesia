@@ -3,12 +3,11 @@ const std = @import("std");
 const dlg = @import("dlg.zig");
 
 pub fn main() !void {
-	const allocator = std.heap.page_allocator;
 	var net = try dlg.Network(.{
 		//.shape = &[_]usize{8, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1},
 		.shape = &[_]usize{8, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1},
 		//.shape = &[_]usize{8, 16, 8, 4, 2, 1},
-	}).initRandom(allocator);
+	}).initRandom();
 	const x: [8]f32 = .{0} ** 8;
 	const y: [1]f32 = undefined;
 	

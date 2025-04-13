@@ -142,7 +142,7 @@ pub const NetworkOptions = struct {
     Cost: ?type = null,
 };
 
-pub fn Network(options: NetworkOptions) type {
+pub fn Network(comptime options: NetworkOptions) type {
     const shape = options.shape;
     // Assert validity of the shape array.
     if (shape.len < 2) @compileError("options.shape: at least two dimensions are required, input and output");
@@ -154,6 +154,15 @@ pub fn Network(options: NetworkOptions) type {
         var result: usize = 0;
         inline for (shape[1..]) |dim| result += dim;
         break :blk result;
+    };
+    const layer_offsets = blk: {
+   		var result: [shape.len - 1]usize = undefined;
+   		var offset: usize = 0;
+   		for (&result, shape[1..]) |*r, dim| {
+   			r.* = offset;	
+   			offset += dim;
+   		}
+   		break :blk result;
     };
     // Unpack options.
     const InputLayer = if (options.InputLayer) |IL| IL(shape[0]) else InputIdentity(shape[0]);
@@ -300,7 +309,7 @@ pub fn Network(options: NetworkOptions) type {
         /// Initializes a network with specified shape with random connections inbetween.
         /// Each node is guaranteed to have the same number of children modulo +-1.
         /// Note that shape[0] is the input dimension and shape[shape.len - 1] is the output dimension.
-        pub fn initRandom(allocator: Allocator) !Self {
+        pub fn initRandom() !Self {
             // Shape must at least specify input and output dimensions.
             assert(shape.len >= 2);
             // Assert that the network does not shrink by more than a factor of 2,
@@ -328,28 +337,12 @@ pub fn Network(options: NetworkOptions) type {
             // Initialize node parents such that each node has at least one child, excluding the last layer.
             // Moreover, the following scheme guarantees that the number of children each node has is
             // uniformly distributed, i.e. every node has an equal number of children modulo +-1.
-            var stack = try ArrayList(usize).initCapacity(allocator, std.mem.max(usize, shape));
-            defer stack.deinit();
-            var offset: usize = 0;
-            for (shape[1..], shape[0 .. shape.len - 1], 0..) |dim, prev, j| {
-                const from = offset;
-                const to = offset + dim;
-                for (net.nodes.parents[from..to]) |*parents| {
-                    const first = if (stack.pop()) |index| index else refill: {
-                        for (0..prev) |i| stack.appendAssumeCapacity(i);
-                        rand.shuffle(usize, stack.items);
-                        break :refill stack.pop().?;
-                    };
-                    const second = if (stack.pop()) |index| index else refill: {
-                        for (0..prev) |i| stack.appendAssumeCapacity(i);
-                        rand.shuffle(usize, stack.items);
-                        break :refill stack.pop().?;
-                    };
-                    parents.* = if (j == 0) .{ @truncate(first), @truncate(second) } else .{ @truncate(offset - prev + first), @truncate(offset - prev + second) };
-                }
-                offset = to;
+            inline for (shape[0..shape.len - 2], layer_offsets[0..layer_offsets.len - 1], layer_offsets[1..]) |dim, from, to| {
+                for (net.nodes.parents[from..to], 0..) |*parents, i| {
+                	parents.* = .{@truncate(i % dim), @truncate((i + 1) % dim)};
+               	}
+               	rand.shuffle(NodeIndex, @as(*[2 * (to - from)]NodeIndex, @ptrCast(net.nodes.parents[from..to])));
             }
-            @memset(&net.nodes.parents, .{ 0, 0 });
 
             return net;
         }
