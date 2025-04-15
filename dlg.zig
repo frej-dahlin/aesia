@@ -27,10 +27,11 @@ pub fn softmax(logit: f32x16) f32x16 {
     return sigma / @as(f32x16, @splat(denom));
 }
 
+// Experimental: fails severly sometimes.
 // Computes (1 + x / 256)^256.
 pub fn softmax_approx(logit: f32x16) f32x16 {
     @setFloatMode(.optimized);
-    const scale = @as(f32x16, @splat(256.0));
+    const scale = @as(f32x16, @splat(@as(f32, 1.0 / 256.0)));
     var ret = @as(f32x16, @splat(1)) + logit * scale;
     inline for (0..8) |_| ret *= ret;
     return ret;
@@ -375,7 +376,7 @@ pub fn Model(comptime options: ModelOptions) type {
         const Self = @This();
         // Unpack options.
         const shape = options.shape;
-        const NetworkType = Network(.{ .shape = shape });
+        pub const NetworkType = Network(.{ .shape = shape });
         const InputLayer = if (options.InputLayer) |IL| IL(NetworkType.dim_in) else InputIdentity(NetworkType.dim_in);
         const OutputLayer = if (options.OutputLayer) |OL| OL(NetworkType.dim_out) else OutputIdentity(NetworkType.dim_out);
         const OptimizerType = if (options.Optimizer) |O| O(Self) else optim.GradientDescent(.default)(Self);

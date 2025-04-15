@@ -30,6 +30,7 @@ pub fn GradientDescent(options: GradientDescentOptions) fn (type) type {
 					const training = model.dataset_training;
 					assert(training.input.len == training.output.len);
 					const net = &model.network;
+
 					@memset(&net.gradient, @splat(0));
 					for (training.input, training.output) |x, y_real| {
 						model.backprop(&x, &y_real); 

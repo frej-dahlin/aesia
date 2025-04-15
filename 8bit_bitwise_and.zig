@@ -4,7 +4,7 @@ const dlg = @import("dlg.zig");
 
 var model: dlg.Model(.{
     .shape = &[_]usize{ 16, 256, 128, 64, 32, 16, 8 },
-    .Optimizer = dlg.optim.GradientDescent(.{ .learn_rate = 0.01 * 10000 }),
+    .Optimizer = dlg.optim.GradientDescent(.{ .learn_rate = 0.01 }),
 }) = .default;
 
 pub fn main() !void {
@@ -15,9 +15,6 @@ pub fn main() !void {
         break :blk seed;
     });
     const rand = prng.random();
-
-    //const learn_rate = 0.1;
-    //const epoch_count = 1000;
 
     // Generate datasets.
     const set_count = 10000;
