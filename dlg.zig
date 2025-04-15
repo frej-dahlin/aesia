@@ -7,6 +7,8 @@ const MultiArrayList = std.MultiArrayList;
 const ArrayList = std.ArrayList;
 const AutoArrayHashMap = std.AutoArrayHashMap;
 
+pub const optim = @import("optim.zig");
+
 pub const f32x16 = @Vector(16, f32);
 
 // Note: This is the hottest part of the code, I *think* that AVX-512 should handle it with gusto,
@@ -28,7 +30,8 @@ pub fn softmax(logit: f32x16) f32x16 {
 // Computes (1 + x / 256)^256.
 pub fn softmax_approx(logit: f32x16) f32x16 {
     @setFloatMode(.optimized);
-    var ret = @as(f32x16, @splat(1)) + logit / @as(f32x16, @splat(256));
+    const scale = @as(f32x16, @splat(256.0));
+    var ret = @as(f32x16, @splat(1)) + logit * scale;
     inline for (0..8) |_| ret *= ret;
     return ret;
 }
@@ -138,11 +141,11 @@ pub fn Network(comptime options: NetworkOptions) type {
         // Doing it in this manner allows for 0 overhead in memory.
         const layer_count = shape.len - 1;
         // Allows for looping over the network layer by layer in a simple manner.
-        const layer_ranges = blk: {
+        const layer_ranges: [layer_count]Range = blk: {
             var ranges: [layer_count]Range = undefined;
             var offset: usize = 0;
-            for (&ranges, shape[1..]) |*r, dim| {
-                r.* = .{ .from = offset, .len = dim };
+            for (&ranges, shape[1..]) |*range, dim| {
+                range.* = .{ .from = offset, .len = dim };
                 offset += dim;
             }
             break :blk ranges;
@@ -150,7 +153,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         const layer_last = layer_ranges[layer_count - 1];
 
         // The number of total nodes in the network.
-        const node_count = layer_last.to();
+        pub const node_count = layer_last.to();
 
         // The network will not have a layer with shape[0] number of nodes. But rather the first layer,
         // nodes from 0 .. shape[1] will have parent indices that range from 0 .. shape[0], which is
@@ -165,14 +168,13 @@ pub fn Network(comptime options: NetworkOptions) type {
         const NodeIndex = std.math.IntFittingRange(0, node_count);
         // We use a struct of arrays for cache efficiency.
         // The parameters that yields the probability of each logic gate.
-        // Note: For some reason there is a performance decrease for align(64) on my machine. -- Frej
-        logit: [node_count]f32x16 align(128),
+        logit: [node_count]f32x16 align(64),
 
         // The cached value of softmax2(logit).
-        sigma: [node_count]f32x16 align(128),
+        sigma: [node_count]f32x16 align(64),
 
         // The gradient of the cost function with respect to the nodes logit.
-        gradient: [node_count]f32x16 align(128),
+        gradient: [node_count]f32x16 align(64),
 
         // The indices of the nodes parents, for the first layer i.e. nodes 0..shape[1] these
         // are instead indices into the input array.
@@ -186,7 +188,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         delta: [node_count]f32,
 
         pub const default = Self{
-            .logit = @splat(@splat(0)),
+            .logit = @splat([_]f32{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10),
             .sigma = @splat(@splat(0)),
             .gradient = @splat(@splat(0)),
             .parents = @splat(.{ 0, 0 }),
@@ -364,22 +366,23 @@ pub const ModelOptions = struct {
     shape: []const usize,
     InputLayer: ?fn (usize) type = null,
     OutputLayer: ?fn (usize) type = null,
+    Optimizer: ?fn (type) type = null,
     Cost: ?type = null,
 };
 
 pub fn Model(comptime options: ModelOptions) type {
-    // Unpack options.
-    const shape = options.shape;
-    const NetworkType = Network(.{ .shape = shape });
-    const InputLayer = if (options.InputLayer) |IL| IL(NetworkType.dim_in) else InputIdentity(NetworkType.dim_in);
-    const OutputLayer = if (options.OutputLayer) |OL| OL(NetworkType.dim_out) else OutputIdentity(NetworkType.dim_out);
-    const Cost = if (options.Cost) |C| C else HalvedMeanSquareError(OutputLayer.dim);
-
-    const InputType = InputLayer.Type;
-    const OutputType = OutputLayer.Type;
-
     return struct {
         const Self = @This();
+        // Unpack options.
+        const shape = options.shape;
+        const NetworkType = Network(.{ .shape = shape });
+        const InputLayer = if (options.InputLayer) |IL| IL(NetworkType.dim_in) else InputIdentity(NetworkType.dim_in);
+        const OutputLayer = if (options.OutputLayer) |OL| OL(NetworkType.dim_out) else OutputIdentity(NetworkType.dim_out);
+        const OptimizerType = if (options.Optimizer) |O| O(Self) else optim.GradientDescent(.default)(Self);
+
+        const InputType = InputLayer.Type;
+        const OutputType = OutputLayer.Type;
+        const Cost = if (options.Cost) |C| C else HalvedMeanSquareError(OutputLayer.dim);
 
         pub const Dataset = struct {
             input: []InputType,
@@ -394,14 +397,16 @@ pub fn Model(comptime options: ModelOptions) type {
         layer_input: InputLayer,
         layer_output: OutputLayer,
         dataset_training: Dataset,
-        dataset_validation: Dataset,
+        dataset_validate: Dataset,
+        optimizer: OptimizerType,
 
         pub const default = Self{
             .network = .default,
             .layer_input = undefined,
             .layer_output = undefined,
             .dataset_training = .empty,
-            .dataset_validation = .empty,
+            .dataset_validate = .empty,
+            .optimizer = .default,
         };
 
         /// Computes the gradient of the cost function with respect to the network's node's logit.
@@ -433,24 +438,18 @@ pub fn Model(comptime options: ModelOptions) type {
             return model.layer_output.eval(b);
         }
 
-        /// Trains the model using plain gradient descent.
-        pub fn train(model: *Self, epoch_count: usize, learn_rate: f32) void {
-            const dataset = model.dataset_training;
-            assert(dataset.input.len == dataset.output.len);
-            const denom: f32 = @floatFromInt(dataset.input.len);
-            const net = &model.network;
+        pub fn train(model: *Self, epoch_count: usize) void {
+            const validate = model.dataset_validate;
+            assert(validate.input.len == validate.output.len);
+            const scale: f32 = 1.0 / @as(f32, @floatFromInt(validate.input.len));
             for (0..epoch_count) |epoch| {
-                @memset(&net.gradient, @splat(0));
+                model.optimizer.step(model);
                 var loss: f32 = 0;
-                for (dataset.input, dataset.output) |x, y_real| {
+                for (validate.input, validate.output) |x, y_real| {
                     const y_pred = model.eval(&x);
-                    loss += Cost.eval(y_pred, &y_real) / denom;
-                    model.backprop(&x, &y_real);
+                    loss += Cost.eval(y_pred, &y_real);
                 }
-                for (&net.logit, net.gradient) |*logit, gradient| {
-                    logit.* -= @as(f32x16, @splat(learn_rate)) * gradient;
-                }
-                std.debug.print("epoch:{d}\tloss:{d}\n", .{ epoch, loss });
+                std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, loss * scale });
             }
         }
     };
