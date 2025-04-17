@@ -24,4 +24,3 @@ pub fn Identity(dim_out: usize) type {
         }
     };
 }
-
