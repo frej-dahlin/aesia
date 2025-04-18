@@ -13,6 +13,7 @@ pub const loss_function = @import("loss.zig");
 pub const optim = @import("optim.zig");
 
 pub const f32x16 = @Vector(16, f32);
+pub const f32x8  = @Vector(8, f32);
 
 /// Ranges are stored in this manner to make the illegal ranges (where to < from) unrepresentable.
 const Range = struct {
@@ -58,32 +59,34 @@ pub fn softmax_approx(logit: f32x16) f32x16 {
 const Gate = struct {
     const count = 16;
     /// Returns a vector representing all values of a soft logic gate.
-    // Fixme: More optimal construction.
+    /// Only intended for reference. The current implementation
+    /// inlines this construction in forwardPass.
     pub fn vector(a: f32, b: f32) f32x16 {
-        @setFloatMode(.optimized);
         return .{
-            0,
-            a * b,
-            a - a * b,
-            a,
-            b - a * b,
-            b,
-            a + b - 2 * a * b,
-            a + b - a * b,
-            1 - (a + b - a * b),
-            1 - (a + b - 2 * a * b),
-            1 - b,
-            1 - (b - a * b),
-            1 - a,
-            1 - (a - a * b),
-            1 - a * b,
+            0,							// false
+            a * b,						// and
+            a - a * b,					// a and not b
+            a,							// passthrough a
+            b - a * b,					// b and not a
+            b,							// passthrough b
+            a + b - 2 * a * b,			// xor
+            a + b - a * b,				// xnor
+            // The following values are simply negation of the above ones in order.
+            // Many authors reverse this order, however this leads to a less efficient
+            // SIMD construction of the vector.
             1,
+            1 - a * b,
+            1 - (a - a * b),
+            1 - a,
+            1 - (b - a * b),
+            1 - b,
+            1 - (a + b - 2 * a * b),
+            1 - (a + b - a * b),
         };
     }
 
     /// Returns the soft gate vector differentiated by the first variable.
     /// Note that it only depends on the second variable.
-    // Fixme: More optimal construction.
     pub fn diff_a(b: f32) f32x16 {
         @setFloatMode(.optimized);
         return .{
@@ -94,21 +97,20 @@ const Gate = struct {
             -b,
             0,
             1 - 2 * b,
-            1 - b,
-            -(1 - b),
-            -(1 - 2 * b),
             0,
-            b,
-            -1,
-            -(1 - b),
-            -b,
-            0,
+           	0,
+           	-b,
+           	-(1 - b),
+           	-1,
+           	b,
+           	0,
+           	-(1 - 2 * b),
+           	0,
         };
     }
 
     /// Returns the soft gate vector differentiated by the second variable.
     /// Note that it only depends on the first variable.
-    // Fixme: More optimal construction.
     pub fn diff_b(a: f32) f32x16 {
         @setFloatMode(.optimized);
         return .{
@@ -120,14 +122,14 @@ const Gate = struct {
             1,
             1 - 2 * a,
             1 - a,
-            -(1 - a),
-            -(1 - 2 * a),
-            -1,
-            -(1 - a),
-            0,
-            a,
-            -a,
-            0,
+           	0,
+           	-a,
+           	a,
+           	0,
+           	-(1 - a),
+           	-1,
+           	-(1 - 2 * a),
+           	-(1 - a),
         };
     }
 };
@@ -205,8 +207,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         gradient: [node_count]f32x16 align(64),
 
         // The derivative of the node's value with respect to each respective input.
-        diff_a: [node_count]f32,
-        diff_b: [node_count]f32,
+        diff: [node_count][2]f32,
 
         // The derivative of the loss function with respect to the node's value.
         // The last layer's delta needs to be computed by a model containing the network.
@@ -228,8 +229,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         pub const default = Self{
             .sigma = @splat(@splat(1.0 / 16.0)),
             .gradient = @splat(@splat(0)),
-            .diff_a = @splat(0),
-            .diff_b = @splat(0),
+            .diff = @splat(.{0, 0}),
             .delta = @splat(0),
             .parents = @splat(.{ 0, 0 }),
             .value = @splat(0),
@@ -238,12 +238,10 @@ pub fn Network(comptime options: NetworkOptions) type {
         /// Evaluates the network.
         pub fn eval(net: *Self, x: *const [dim_in]f32) *const [dim_out]f32 {
             @setFloatMode(.optimized);
-            // Note: One single for-loop is faster, however, this structure is
-            // in preparation for multithreading.
             // This inline for loop avoids two separate for loops with the same body
             // except input being different for the first layer, nodes from 0 to shape[i].
             inline for (layer_ranges, 0..) |range, l| {
-                const input = if (l == 0) x else net.value;
+                const input = if (l == 0) x else &net.value;
                 for (range.from..range.to()) |j| {
                     const parents = net.parents[j];
                     const a = input[parents[0]];
@@ -255,24 +253,38 @@ pub fn Network(comptime options: NetworkOptions) type {
         }
 
         /// Evaluates the network and caches the relevant data for the
-        /// backwardPass: del_a, del_b, and the gradient, which is later correctly
+        /// backwardPass: diff and the gradient, which is later correctly
         /// scaled during the backward pass.
         pub fn forwardPass(net: *Self, input: *const [dim_in]f32) *const [dim_out]f32 {
             @setFloatMode(.optimized);
-            @memset(&net.gradient, @splat(0));
             // See the comment in eval(...) above for why we loop in this manner.
             inline for (layer_ranges, 0..) |range, l| {
-                const parent_value = if (l == 0) input else net.value;
+            	// It is very important to take the address of net.value here, otherwise the
+            	// entire array will be memcpy:ed.
+                const parent_value = if (l == 0) input else &net.value;
                 for (range.from..range.to()) |j| {
                     const parents = net.parents[j];
                     const a = parent_value[parents[0]];
                     const b = parent_value[parents[1]];
                     const sigma = net.sigma[j];
-                    net.diff_a[j] = @reduce(.Add, sigma * Gate.diff_a(b));
-                    net.diff_b[j] = @reduce(.Add, sigma * Gate.diff_b(a));
-                    const gate = Gate.vector(a, b);
+                    
+					const a_coef: f32x8 = .{0, 0, 1, 1, 0, 0, 1, 1};
+					const b_coef: f32x8 = .{0, 0, 0, 0, 1, 1, 1, 1};
+					const mix_coef: f32x8 = .{0, 1, -1, 0, -1, 0, -2, -1};
+					
+					const diff_a_half = a_coef + mix_coef * @as(f32x8, @splat(b));
+					const diff_b_half = b_coef + mix_coef * @as(f32x8, @splat(a));
+                    net.diff[j] = .{
+                    	@reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
+                    	@reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
+                 	};
+                    const gate_half =
+                    	a_coef * @as(f32x8, @splat(a)) +
+                    	b_coef * @as(f32x8, @splat(b)) +
+                    	mix_coef * @as(f32x8, @splat(a*b));
+                    const gate = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
                     net.value[j] = @reduce(.Add, sigma * gate);
-                    net.gradient[j] += sigma * (gate - @as(f32x16, @splat(net.value[j])));
+                    net.gradient[j] = sigma * (gate - @as(f32x16, @splat(net.value[j])));
                 }
             }
             return @ptrCast(net.value[layer_last.from..layer_last.to()]);
@@ -299,8 +311,8 @@ pub fn Network(comptime options: NetworkOptions) type {
                     cost_gradient[j] += @as(f32x16, @splat(tau * delta)) * net.gradient[j];
                     if (l != 0) {
                         const parents = net.parents[j];
-                        net.delta[parents[0]] += 2.0 * delta * net.diff_a[j];
-                        net.delta[parents[1]] += 2.0 * delta * net.diff_b[j];
+                        net.delta[parents[0]] += 2.0 * delta * net.diff[j][0];
+                        net.delta[parents[1]] += 2.0 * delta * net.diff[j][1];
                     }
                 }
             }
