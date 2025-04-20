@@ -47,6 +47,57 @@ pub fn GradientDescent(options: GradientDescentOptions) fn (type) type {
     }.Optimizer;
 }
 
+pub const RPropOptions = struct {
+    eta_plus: f32,
+    eta_minus: f32,
+    step_size_max: f32,
+    step_size_min: f32,
+
+    pub const default = RPropOptions{
+        .eta_plus = 1.2,
+        .eta_minus = 0.5,
+        .step_size_max = 50,
+        .step_size_min = 1e-06,
+    };
+};
+
+pub fn RProp(options: RPropOptions) fn (usize) type {
+    return struct {
+        pub fn Optimizer(parameter_count: usize) type {
+            return struct {
+                const Self = @This();
+
+                const eta_plus = options.eta_plus;
+                const eta_minus = options.eta_minus;
+                const step_size_max = options.step_size_max;
+                const step_size_min = options.step_size_min;
+
+                eta: [parameter_count]f32,
+                prev: [parameter_count]f32,
+
+                pub const default = Self{
+                    .eta = @splat(0),
+                    .prev = @splat(0),
+                };
+
+                pub fn step(self: *Self, parameters: *[parameter_count]f32, gradient: *[parameter_count]f32) void {
+                    for (parameters, gradient, &self.eta, &self.prev) |*parameter, partial, *eta, *prev| {
+                        const eta_branches = @Vector(3, f32){
+                            @max(eta_minus * eta.*, step_size_min),
+                            eta.*,
+                            @min(eta_plus * eta.*, step_size_max),
+                        };
+                        const index = @as(usize, @intFromFloat(std.math.sign(partial * prev.*) + 1));
+                        eta.* = eta_branches[index];
+                        parameter.* -= eta.* * std.math.sign(partial);
+                        prev.* = partial;
+                    }
+                }
+            };
+        }
+    }.Optimizer;
+}
+
 pub const AdamOptions = struct {
     learn_rate: f32 = 0.01,
     beta: [2]f32 = .{ 0.9, 0.999 },

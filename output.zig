@@ -3,7 +3,7 @@ pub fn Identity(dim_in: usize) type {
         const parameter_count = 0;
         const Self = @This();
         pub const dim_out = dim_in;
-        pub const Type = [dim_out]f32;
+        pub const Prediction = [dim_out]f32;
 
         delta: [dim_out]f32,
 
@@ -11,11 +11,11 @@ pub fn Identity(dim_in: usize) type {
             .delta = @splat(0),
         };
 
-        pub fn eval(_: *Self, z: *const Type) *const Type {
+        pub fn eval(_: *Self, z: *const Prediction) *const Prediction {
             return z;
         }
 
-        pub fn forwardPass(_: *Self, z: *const Type) *const Type {
+        pub fn forwardPass(_: *Self, z: *const Prediction) *const Prediction {
             return z;
         }
 
@@ -25,31 +25,39 @@ pub fn Identity(dim_in: usize) type {
     };
 }
 
-pub fn GroupSum(dim_out: usize) type {
-    if (dim_out == 0) @compileError("GroupSum output dimension needs to be nonzero");
+pub fn GroupSum(tau: f32, _dim_out: usize) fn (usize) type {
+    if (_dim_out == 0) @compileError("GroupSum output dimension needs to be nonzero");
     return struct {
         pub fn Init(dim_in: usize) type {
-            if (dim_in % dim_out != 0) @compileError("GroupSum input dimension must be evenly divisible by output dimension");
+            if (dim_in % _dim_out != 0) @compileError("GroupSum input dimension must be evenly divisible by output dimension");
             return struct {
                 const Self = @This();
+                pub const dim_out = _dim_out;
 
-                pub const Type = [dim_out]f32;
+                pub const Prediction = [dim_out]f32;
                 value: [dim_out]f32,
                 delta: [dim_out]f32,
 
-                pub fn eval(self: *Self, input: *const [dim_in]f32) *const Type {
-                    const quot = dim_in / dim_out;
-                    const denom: f32 = @floatFromInt(dim_in / dim_out);
+                const quot = dim_in / dim_out;
+                const scale: f32 = 1.0 / (tau * @as(comptime_float, @floatFromInt(dim_out)));
+
+                pub fn eval(self: *Self, input: *const [dim_in]f32) *const Prediction {
                     @memset(&self.value, 0);
                     for (&self.value, 0..) |*coord, k| {
                         for (k * quot..(k + 1) * quot) |i| coord.* += input[i];
-                        coord.* /= denom;
+                        coord.* *= scale;
                     }
                     return &self.value;
                 }
 
-                pub fn forwardPass(self: *Self, input: *const [dim_in]f32) *const Type {
+                pub fn forwardPass(self: *Self, input: *const [dim_in]f32) *const Prediction {
                     return self.eval(input);
+                }
+
+                pub fn backwardPass(self: *Self, delta_prev: *[dim_in]f32) void {
+                    for (&self.delta, 0..) |delta, k| {
+                        for (k * quot..(k + 1) * quot) |i| delta_prev[i] = delta * scale;
+                    }
                 }
             };
         }

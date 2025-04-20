@@ -3,8 +3,9 @@ const std = @import("std");
 const dlg = @import("dlg.zig");
 
 var model: dlg.Model(.{
-    .shape = &(.{16} ++ .{64} ** 16 ++ .{32, 16, 8 }),
-    .Optimizer = dlg.optim.Adam(.{ .learn_rate = 0.01 }),
+    .shape = &(.{16} ++ .{64} ** 16 ++ .{ 32, 16, 8 }),
+    //.Optimizer = dlg.optim.Adam(.{ .learn_rate = 0.01 }),
+    .Optimizer = dlg.optim.GradientDescent(.{ .momentum = 0.9 }),
 }) = .default;
 
 pub fn main() !void {
@@ -34,7 +35,7 @@ pub fn main() !void {
             base *= 2;
         }
     }
-    model.train(dataset[0..training_count], dataset[training_count..], 100, 32);
+    model.train(dataset[0..training_count], dataset[training_count..], 100, 9000);
 
     for (dataset[training_count..]) |point| {
         for (model.eval(&point.input)) |softbit| std.debug.print("{d}", .{@round(softbit)});

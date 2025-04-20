@@ -13,7 +13,7 @@ pub const loss_function = @import("loss.zig");
 pub const optim = @import("optim.zig");
 
 pub const f32x16 = @Vector(16, f32);
-pub const f32x8  = @Vector(8, f32);
+pub const f32x8 = @Vector(8, f32);
 
 /// Ranges are stored in this manner to make the illegal ranges (where to < from) unrepresentable.
 const Range = struct {
@@ -25,6 +25,8 @@ const Range = struct {
     }
 };
 
+/// Logits are normalized such that max(logits) == 0.
+/// When the logits grow to big exp^logit will explode.
 pub fn maxNormalize(v: f32x16) f32x16 {
     return v - @as(f32x16, @splat(@reduce(.Max, v)));
 }
@@ -63,14 +65,14 @@ const Gate = struct {
     /// inlines this construction in forwardPass.
     pub fn vector(a: f32, b: f32) f32x16 {
         return .{
-            0,							// false
-            a * b,						// and
-            a - a * b,					// a and not b
-            a,							// passthrough a
-            b - a * b,					// b and not a
-            b,							// passthrough b
-            a + b - 2 * a * b,			// xor
-            a + b - a * b,				// xnor
+            0, // false
+            a * b, // and
+            a - a * b, // a and not b
+            a, // passthrough a
+            b - a * b, // b and not a
+            b, // passthrough b
+            a + b - 2 * a * b, // xor
+            a + b - a * b, // xnor
             // The following values are simply negation of the above ones in order.
             // Many authors reverse this order, however this leads to a less efficient
             // SIMD construction of the vector.
@@ -98,14 +100,14 @@ const Gate = struct {
             0,
             1 - 2 * b,
             0,
-           	0,
-           	-b,
-           	-(1 - b),
-           	-1,
-           	b,
-           	0,
-           	-(1 - 2 * b),
-           	0,
+            0,
+            -b,
+            -(1 - b),
+            -1,
+            b,
+            0,
+            -(1 - 2 * b),
+            0,
         };
     }
 
@@ -122,14 +124,14 @@ const Gate = struct {
             1,
             1 - 2 * a,
             1 - a,
-           	0,
-           	-a,
-           	a,
-           	0,
-           	-(1 - a),
-           	-1,
-           	-(1 - 2 * a),
-           	-(1 - a),
+            0,
+            -a,
+            a,
+            0,
+            -(1 - a),
+            -1,
+            -(1 - 2 * a),
+            -(1 - a),
         };
     }
 };
@@ -137,6 +139,7 @@ const Gate = struct {
 const NetworkOptions = struct {
     shape: []const usize,
     softmax_base_2: bool = false,
+    gate_temperature: f32 = 1.0,
 };
 
 /// A network of differentiable logic gates.
@@ -207,21 +210,28 @@ pub fn Network(comptime options: NetworkOptions) type {
         gradient: [node_count]f32x16 align(64),
 
         // The derivative of the node's value with respect to each respective input.
-        diff: [node_count][2]f32,
+        diff: [node_count][2]f32 align(64),
 
         // The derivative of the loss function with respect to the node's value.
         // The last layer's delta needs to be computed by a model containing the network.
         // The remaining layer's delta are computed by backwardPass.
-        delta: [node_count]f32,
+        delta: [node_count]f32 align(64),
 
         // The indices of the node's parents, for the first layer i.e. nodes 0..shape[1] these
         // are instead indices into the input.
-        parents: [node_count][2]NodeIndex,
+        // Note: These can be entirely optimized away. Using a reversible LCG one can generate
+        // the indices using a fixed seed. Additionally one can safely assume that the j:th
+        // node in the l:th layer is the parent of the j:th (possibly wrapping) node in l+1:th layer.
+        // In this way we guarantee that each node has children. To do generally will be quite tricky,
+        // especially if avoiding modulo operations. Instead of n % range, one can do use a multiply
+        // followed by a shift. See the blog post: https://lemire.me/blog/2016/06/30/fast-random-shuffling/
+        // It is worth the effort, since then the data structure can be truly static, no dynamic initialization.
+        parents: [node_count][2]NodeIndex align(64),
 
         // The value of each node, cached for efficiency, used in eval and forwardPass.
         // Note: It is possible, but inconvenient to only store the values in an array
         // whose length is the maximum node_count layerwise.
-        value: [node_count]f32,
+        value: [node_count]f32 align(64),
 
         // A default network with uniform probabilities for each gate.
         // Before using the network on must call randomizeConnections to
@@ -229,7 +239,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         pub const default = Self{
             .sigma = @splat(@splat(1.0 / 16.0)),
             .gradient = @splat(@splat(0)),
-            .diff = @splat(.{0, 0}),
+            .diff = @splat(.{ 0, 0 }),
             .delta = @splat(0),
             .parents = @splat(.{ 0, 0 }),
             .value = @splat(0),
@@ -259,30 +269,36 @@ pub fn Network(comptime options: NetworkOptions) type {
             @setFloatMode(.optimized);
             // See the comment in eval(...) above for why we loop in this manner.
             inline for (layer_ranges, 0..) |range, l| {
-            	// It is very important to take the address of net.value here, otherwise the
-            	// entire array will be memcpy:ed.
+                // It is very important(!) to take the address of net.value here, otherwise the
+                // entire array will be memcpy:ed.
                 const parent_value = if (l == 0) input else &net.value;
                 for (range.from..range.to()) |j| {
                     const parents = net.parents[j];
                     const a = parent_value[parents[0]];
                     const b = parent_value[parents[1]];
                     const sigma = net.sigma[j];
-                    
-					const a_coef: f32x8 = .{0, 0, 1, 1, 0, 0, 1, 1};
-					const b_coef: f32x8 = .{0, 0, 0, 0, 1, 1, 1, 1};
-					const mix_coef: f32x8 = .{0, 1, -1, 0, -1, 0, -2, -1};
-					
-					const diff_a_half = a_coef + mix_coef * @as(f32x8, @splat(b));
-					const diff_b_half = b_coef + mix_coef * @as(f32x8, @splat(a));
+
+                    // Inline construction of Gate.vector(a, b), Gate.diff_a(b), and Gate.diff_b(a).
+                    // We do it in this way since all three depend on mix_coef, and two out of three
+                    // depend on a_coef/b_coef.
+                    const a_coef: f32x8 = .{ 0, 0, 1, 1, 0, 0, 1, 1 };
+                    const b_coef: f32x8 = .{ 0, 0, 0, 0, 1, 1, 1, 1 };
+                    const mix_coef: f32x8 = .{ 0, 1, -1, 0, -1, 0, -2, -1 };
+
+                    // All three desired vectors have halfway symmetry so we only
+                    // explicitly construct the first half.
+                    const diff_a_half = a_coef + mix_coef * @as(f32x8, @splat(b));
+                    const diff_b_half = b_coef + mix_coef * @as(f32x8, @splat(a));
                     net.diff[j] = .{
-                    	@reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
-                    	@reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
-                 	};
+                        @reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
+                        @reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
+                    };
                     const gate_half =
-                    	a_coef * @as(f32x8, @splat(a)) +
-                    	b_coef * @as(f32x8, @splat(b)) +
-                    	mix_coef * @as(f32x8, @splat(a*b));
+                        a_coef * @as(f32x8, @splat(a)) +
+                        b_coef * @as(f32x8, @splat(b)) +
+                        mix_coef * @as(f32x8, @splat(a * b));
                     const gate = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
+
                     net.value[j] = @reduce(.Add, sigma * gate);
                     net.gradient[j] = sigma * (gate - @as(f32x16, @splat(net.value[j])));
                 }
@@ -295,8 +311,8 @@ pub fn Network(comptime options: NetworkOptions) type {
         pub fn backwardPass(net: *Self, cost_gradient: *[node_count]f32x16) void {
             @setFloatMode(.optimized);
 
-            // Compensating factor for softmax if using base 2.
-            const tau = if (options.softmax_base_2) @log(2.0) else 1.0;
+            // Compensating factor for the softmax temperature.
+            const tau = (if (options.softmax_base_2) @log(2.0) else 1.0) / options.gate_temperature;
 
             @memset(net.delta[0..layer_last.from], 0);
             // Propagate the delta backwards, layer by layer, and use it to compute the gradient.
@@ -311,8 +327,8 @@ pub fn Network(comptime options: NetworkOptions) type {
                     cost_gradient[j] += @as(f32x16, @splat(tau * delta)) * net.gradient[j];
                     if (l != 0) {
                         const parents = net.parents[j];
-                        net.delta[parents[0]] += 2.0 * delta * net.diff[j][0];
-                        net.delta[parents[1]] += 2.0 * delta * net.diff[j][1];
+                        net.delta[parents[0]] += delta * net.diff[j][0];
+                        net.delta[parents[1]] += delta * net.diff[j][1];
                     }
                 }
             }
@@ -326,7 +342,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         /// Updates the probability distribution, sigma, as softmax of the given logits.
         pub fn setLogits(net: *Self, logits: *[node_count]f32x16) void {
             for (&net.sigma, logits) |*sigma, logit| {
-                sigma.* = if (options.softmax_base_2) softmax2(logit) else softmax(logit);
+                sigma.* = if (options.softmax_base_2) softmax2(logit / @as(f32x16, @splat(options.gate_temperature))) else softmax(logit / @as(f32x16, @splat(options.gate_temperature)));
             }
         }
 
@@ -365,6 +381,7 @@ pub const ModelOptions = struct {
     OutputLayer: ?fn (usize) type = null,
     Optimizer: ?fn (usize) type = null,
     Loss: ?type = null,
+    gate_temperature: f32 = 1,
 };
 
 /// A model encapsulates a differentiable logic gate network into a machine learning context.
@@ -375,7 +392,10 @@ pub fn Model(comptime options: ModelOptions) type {
 
         // Unpack options.
         const shape = options.shape;
-        const NetworkType = Network(.{ .shape = shape });
+        const NetworkType = Network(.{
+            .shape = shape,
+            .gate_temperature = options.gate_temperature,
+        });
         const parameter_count = NetworkType.parameter_count;
 
         const InputLayer = if (options.InputLayer) |IL| IL(NetworkType.dim_in) else input_layer.Identity(NetworkType.dim_in);
@@ -383,11 +403,35 @@ pub fn Model(comptime options: ModelOptions) type {
         const Optimizer = if (options.Optimizer) |O| O(parameter_count) else optim.Adam(.default)(parameter_count);
         const Loss = if (options.Loss) |C| C else loss_function.HalvedMeanSquareError(OutputLayer.dim_out);
 
-        const Input = InputLayer.Type;
-        const Output = OutputLayer.Type;
-        pub const Datapoint = struct {
-            input: Input,
-            output: Output,
+        const Feature = InputLayer.Feature;
+        const Prediction = OutputLayer.Prediction;
+        const Label = Loss.Label;
+        pub const Dataset = struct {
+            features: []const Feature,
+            labels: []const Label,
+
+            pub const empty = Dataset{ .features = &.{}, .labels = &.{} };
+
+            pub fn len(dataset: Dataset) usize {
+                assert(dataset.features.len == dataset.labels.len);
+                return dataset.features.len;
+            }
+
+            pub fn init(features: []const Feature, labels: []const Label) Dataset {
+                assert(features.len == labels.len);
+                return .{
+                    .features = features,
+                    .labels = labels,
+                };
+            }
+
+            pub fn slice(dataset: Dataset, from: usize, to: usize) Dataset {
+                assert(from <= to);
+                return .{
+                    .features = dataset.features[from..to],
+                    .labels = dataset.labels[from..to],
+                };
+            }
         };
 
         // The parameters of the network, parameters 0 ... network.parameter_count are reserved for the network,
@@ -414,64 +458,62 @@ pub fn Model(comptime options: ModelOptions) type {
         };
 
         /// Returns the mean loss over a dataset.
-        pub fn cost(model: *Self, dataset: []const Datapoint) f32 {
-            assert(dataset.len > 0);
+        pub fn cost(model: *Self, dataset: Dataset) f32 {
+            assert(dataset.len() > 0);
             var result: f32 = 0;
-            for (dataset) |point| result += model.loss(&point.input, &point.output);
-            return result / @as(f32, @floatFromInt(dataset.len));
+            for (dataset.features, dataset.labels) |feature, label| result += model.loss(&feature, &label);
+            return result / @as(f32, @floatFromInt(dataset.len()));
         }
 
         /// Computes the gradient of the sum of the loss function over the entire dataset.
-        pub fn differentiate(model: *Self, dataset: []const Datapoint) void {
+        pub fn differentiate(model: *Self, dataset: Dataset) void {
             @memset(&model.gradient, 0);
             // Fixme: Branch on dataset length for optimal network evaluation during regular SGD.
             model.network.setLogits(@ptrCast(&model.parameters));
-            for (dataset) |data| {
-                const input = &data.input;
-                const prediction = model.forwardPass(input);
-                const actual = &data.output;
-                model.backwardPass(prediction, actual);
+            for (dataset.features, dataset.labels) |feature, label| {
+                const prediction = model.forwardPass(&feature);
+                model.backwardPass(prediction, &label);
             }
         }
 
         /// Accumulates the gradient backwards.
-        pub fn backwardPass(model: *Self, prediction: *const Output, actual: *const Output) void {
-            Loss.gradient(prediction, actual, &model.layer_output.delta);
+        pub fn backwardPass(model: *Self, prediction: *const Prediction, label: *const Label) void {
+            Loss.gradient(prediction, label, &model.layer_output.delta);
             model.layer_output.backwardPass(model.network.lastLayerDelta());
             model.network.backwardPass(@ptrCast(&model.gradient));
         }
 
         /// Evaluates the model, caching all necessary data to compute the gradient in the backward pass.
-        pub fn forwardPass(model: *Self, input: *const Input) *const Output {
-            const a = model.layer_input.eval(input);
+        pub fn forwardPass(model: *Self, feature: *const Feature) *const Prediction {
+            const a = model.layer_input.eval(feature);
             const b = model.network.forwardPass(a);
             return model.layer_output.forwardPass(b);
         }
 
         /// The loss of the model given some input and its expected output.
-        pub fn loss(model: *Self, input: *const Input, actual: *const Output) f32 {
-            return Loss.eval(model.eval(input), actual);
+        pub fn loss(model: *Self, feature: *const Feature, label: *const Label) f32 {
+            return Loss.eval(model.eval(feature), label);
         }
 
         /// Evaluates the model.
-        pub fn eval(model: *Self, input: *const Input) *const Output {
-            const a = model.layer_input.eval(input);
+        pub fn eval(model: *Self, feature: *const Feature) *const Prediction {
+            const a = model.layer_input.eval(feature);
             const b = model.network.eval(a);
             return model.layer_output.eval(b);
         }
 
         /// Trains the model on a given dataset for a specified amount of epochs and batch size.
         /// Every epoch the model is 'validated' on another given dataset.
-        pub fn train(model: *Self, training: []const Datapoint, validate: []const Datapoint, epoch_count: usize, batch_size: usize) void {
+        pub fn train(model: *Self, training: Dataset, validate: Dataset, epoch_count: usize, batch_size: usize) void {
             assert(batch_size > 0);
             for (0..epoch_count) |epoch| {
                 var offset: usize = 0;
-                while (training.len > offset) : (offset += batch_size) {
-                    const subset = training[offset..@min(offset + batch_size, training.len)];
+                while (training.len() > offset) : (offset += batch_size) {
+                    const subset = training.slice(offset, @min(offset + batch_size, training.len()));
                     model.differentiate(subset);
                     model.optimizer.step(&model.parameters, &model.gradient);
                 }
-                if (validate.len > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });
+                if (validate.len() > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });
             }
         }
     };
