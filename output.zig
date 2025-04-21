@@ -33,31 +33,37 @@ pub fn GroupSum(tau: f32, _dim_out: usize) fn (usize) type {
             return struct {
                 const Self = @This();
                 pub const dim_out = _dim_out;
-
                 pub const Prediction = [dim_out]f32;
-                value: [dim_out]f32,
-                delta: [dim_out]f32,
-
                 const quot = dim_in / dim_out;
                 const scale: f32 = 1.0 / (tau * @as(comptime_float, @floatFromInt(dim_out)));
 
-                pub fn eval(self: *Self, input: *const [dim_in]f32) *const Prediction {
-                    @memset(&self.value, 0);
-                    for (&self.value, 0..) |*coord, k| {
-                        for (k * quot..(k + 1) * quot) |i| coord.* += input[i];
-                        coord.* *= scale;
+                pub fn eval(buffer: anytype) *const Prediction {
+                	const input = buffer.front_slice(dim_in);
+                	const prediction = buffer.back_slice(dim_out);
+                	@memset(prediction, 0);
+                	for (prediction, 0..) |*coordinate, k| {
+                		const from = k * quot;
+                		const to = from + quot;
+                		for (input[from..to]) |softbit| coordinate.* += softbit;
+                		coordinate.* *= scale;
                     }
-                    return &self.value;
+                    buffer.swap();
+                    return prediction;
                 }
 
-                pub fn forwardPass(self: *Self, input: *const [dim_in]f32) *const Prediction {
-                    return self.eval(input);
+                pub fn forwardPass(buffer: anytype) *const Prediction {
+                    return eval(buffer);
                 }
 
-                pub fn backwardPass(self: *Self, delta_prev: *[dim_in]f32) void {
-                    for (&self.delta, 0..) |delta, k| {
-                        for (k * quot..(k + 1) * quot) |i| delta_prev[i] = delta * scale;
-                    }
+                pub fn backwardPass(buffer: anytype) void {
+                	const delta_in = buffer.front_slice(dim_out);
+                	const delta_out = buffer.back_slice(dim_in);
+                	for (delta_in, 0..) |child, k| {
+                		const from = k * quot;
+                		const to = from + quot;
+                		for (delta_out[from..to]) |*parent| parent.* = child * scale;
+                	}
+                	buffer.swap();
                 }
             };
         }

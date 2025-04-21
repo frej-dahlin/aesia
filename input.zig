@@ -14,13 +14,14 @@ pub fn RelaxBits(bit_count: usize) type {
 }
 
 pub fn Identity(dim_out: usize) type {
-    return struct {
-        const Self = @This();
-        const dim = dim_out;
-        pub const Feature = [dim]f32;
-
-        pub fn eval(_: *Self, x: *const Feature) *const [dim_out]f32 {
-            return x;
-        }
-    };
+	return struct {
+		const Self = @This();
+		const dim_in = dim_out;	
+		pub const Feature = [dim_in]f32;
+		
+		pub fn eval(x: *const Feature, buffer: anytype) void {
+			@memcpy(buffer.back_slice(dim_out), x);
+			buffer.swap();
+		}
+	};
 }

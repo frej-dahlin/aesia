@@ -31,15 +31,17 @@ pub fn DiscreteCrossEntropy(Int: type, dim: usize) type {
             return -@log(@exp(prediction[label.*] - max) / denom);
         }
 
-        pub fn gradient(prediction: *const Prediction, label: *const Label, result: *[dim]f32) void {
+		pub fn gradient(prediction: *const Prediction, label: *const Label, buffer: anytype) void {
             assert(label.* < dim);
             var denom: f32 = 0;
             const max = std.mem.max(f32, prediction);
             for (prediction) |logit| denom += @exp(logit - max);
-            for (result, prediction, 0..) |*partial, logit, j| {
+            const output = buffer.back_slice(dim);
+            for (output, prediction, 0..) |*partial, logit, j| {
                 const kronecker: f32 = if (label.* == j) 1.0 else 0.0;
                 partial.* = @exp(logit - max) / denom - kronecker;
             }
+            buffer.swap();
         }
     };
 }

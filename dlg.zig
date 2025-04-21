@@ -25,6 +25,46 @@ const Range = struct {
     }
 };
 
+pub fn DoubleBuffer(T: type, len: usize) type {
+	return struct {
+		const Self = @This();
+		
+		data: [2 * len]T,
+		half: u1,
+		
+		pub fn init(element: T) Self {
+			return Self{
+				.data = @splat(element),
+				.half = 0,
+			};
+		}
+		
+		pub fn front(buffer: *const Self) *const [len]T {
+			const from = buffer.half * len;
+			const to = from + len;
+			return @ptrCast(buffer.data[from..to]);
+		}
+		
+		pub fn front_slice(buffer: *const Self, comptime slice_len: usize) *const [slice_len]T {
+			return @ptrCast(buffer.front()[0..slice_len]);
+		}
+		
+		pub fn back(buffer: *Self) *[len]T {
+			const from = (buffer.half +% 1) * len;
+			const to = from + len;
+			return @ptrCast(buffer.data[from..to]);
+		}
+		
+		pub fn back_slice(buffer: *Self, comptime slice_len: usize) *[slice_len]T {
+			return @ptrCast(buffer.back()[0..slice_len]);	
+		}
+		
+		pub fn swap(buffer: *Self) void {
+			buffer.half +%= 1;
+		}
+	};
+}
+
 /// Logits are normalized such that max(logits) == 0.
 /// When the logits grow to big exp^logit will explode.
 pub fn maxNormalize(v: f32x16) f32x16 {
@@ -177,7 +217,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         pub const parameter_count = Gate.count * node_count;
         // Default logits that result in a bias to the passthrough gates.
         // This stabilizes training of the network.
-        pub const passtrough_biased: [node_count]f32x16 = @splat(.{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10);
+        pub const passtrough_biased: [node_count]f32x16 = @splat(.{ 0, 0, 0, 16, 0, 16 } ++ .{0} ** 10);
 
         // The network does not have a layer with shape[0] number of nodes. But rather the first layer,
         // nodes from 0 .. shape[1] will have parent indices that range from 0 .. shape[0], which is
@@ -189,7 +229,7 @@ pub fn Network(comptime options: NetworkOptions) type {
             assert(dim_out == layer_last.len);
         }
 
-        const NodeIndex = std.math.IntFittingRange(0, node_count);
+		const NodeIndex = std.math.IntFittingRange(0, std.mem.max(usize, shape));
 
         // We use a struct of arrays for cache efficiency.
 
@@ -212,11 +252,6 @@ pub fn Network(comptime options: NetworkOptions) type {
         // The derivative of the node's value with respect to each respective input.
         diff: [node_count][2]f32 align(64),
 
-        // The derivative of the loss function with respect to the node's value.
-        // The last layer's delta needs to be computed by a model containing the network.
-        // The remaining layer's delta are computed by backwardPass.
-        delta: [node_count]f32 align(64),
-
         // The indices of the node's parents, for the first layer i.e. nodes 0..shape[1] these
         // are instead indices into the input.
         // Note: These can be entirely optimized away. Using a reversible LCG one can generate
@@ -228,11 +263,6 @@ pub fn Network(comptime options: NetworkOptions) type {
         // It is worth the effort, since then the data structure can be truly static, no dynamic initialization.
         parents: [node_count][2]NodeIndex align(64),
 
-        // The value of each node, cached for efficiency, used in eval and forwardPass.
-        // Note: It is possible, but inconvenient to only store the values in an array
-        // whose length is the maximum node_count layerwise.
-        value: [node_count]f32 align(64),
-
         // A default network with uniform probabilities for each gate.
         // Before using the network on must call randomizeConnections to
         // initialize every node's parents.
@@ -240,42 +270,41 @@ pub fn Network(comptime options: NetworkOptions) type {
             .sigma = @splat(@splat(1.0 / 16.0)),
             .gradient = @splat(@splat(0)),
             .diff = @splat(.{ 0, 0 }),
-            .delta = @splat(0),
             .parents = @splat(.{ 0, 0 }),
-            .value = @splat(0),
         };
 
         /// Evaluates the network.
-        pub fn eval(net: *Self, x: *const [dim_in]f32) *const [dim_out]f32 {
+        pub fn eval(net: *Self, buffer: anytype) *const [dim_out]f32 {
             @setFloatMode(.optimized);
             // This inline for loop avoids two separate for loops with the same body
             // except input being different for the first layer, nodes from 0 to shape[i].
             inline for (layer_ranges, 0..) |range, l| {
-                const input = if (l == 0) x else &net.value;
-                for (range.from..range.to()) |j| {
+            	const inputs = buffer.front_slice(shape[l]);
+            	const activations = buffer.back_slice(range.len);
+                for (activations, range.from..range.to()) |*activation, j| {
                     const parents = net.parents[j];
-                    const a = input[parents[0]];
-                    const b = input[parents[1]];
-                    net.value[j] = @reduce(.Add, net.sigma[j] * Gate.vector(a, b));
+                    const a = inputs[parents[0]];
+                    const b = inputs[parents[1]];
+                    activation.* = @reduce(.Add, net.sigma[j] * Gate.vector(a, b));
                 }
+                buffer.swap();
             }
-            return @ptrCast(net.value[layer_last.from..layer_last.to()]);
+            return buffer.front_slice(layer_last.len);
         }
 
         /// Evaluates the network and caches the relevant data for the
         /// backwardPass: diff and the gradient, which is later correctly
         /// scaled during the backward pass.
-        pub fn forwardPass(net: *Self, input: *const [dim_in]f32) *const [dim_out]f32 {
+        pub fn forwardPass(net: *Self, buffer: anytype) *const [dim_out]f32 {
             @setFloatMode(.optimized);
             // See the comment in eval(...) above for why we loop in this manner.
             inline for (layer_ranges, 0..) |range, l| {
-                // It is very important(!) to take the address of net.value here, otherwise the
-                // entire array will be memcpy:ed.
-                const parent_value = if (l == 0) input else &net.value;
-                for (range.from..range.to()) |j| {
+            	const inputs = buffer.front_slice(shape[l]);
+            	const activations = buffer.back_slice(range.len);
+                for (activations, range.from..range.to()) |*activation, j| {
                     const parents = net.parents[j];
-                    const a = parent_value[parents[0]];
-                    const b = parent_value[parents[1]];
+                    const a = inputs[parents[0]];
+                    const b = inputs[parents[1]];
                     const sigma = net.sigma[j];
 
                     // Inline construction of Gate.vector(a, b), Gate.diff_a(b), and Gate.diff_b(a).
@@ -299,22 +328,22 @@ pub fn Network(comptime options: NetworkOptions) type {
                         mix_coef * @as(f32x8, @splat(a * b));
                     const gate = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
 
-                    net.value[j] = @reduce(.Add, sigma * gate);
-                    net.gradient[j] = sigma * (gate - @as(f32x16, @splat(net.value[j])));
+					activation.* = @reduce(.Add, sigma * gate);
+                    net.gradient[j] = sigma * (gate - @as(f32x16, @splat(activation.*)));
                 }
+                buffer.swap();
             }
-            return @ptrCast(net.value[layer_last.from..layer_last.to()]);
+            return buffer.front_slice(layer_last.len);
         }
 
         /// Accumulates the loss gradient to the cost gradient with respect to the network's logits.
         /// One must first call forwardPass to cache the relevant data.
-        pub fn backwardPass(net: *Self, cost_gradient: *[node_count]f32x16) void {
+        pub fn backwardPass(net: *Self, cost_gradient: *[node_count]f32x16, buffer: anytype) void {
             @setFloatMode(.optimized);
 
             // Compensating factor for the softmax temperature.
             const tau = (if (options.softmax_base_2) @log(2.0) else 1.0) / options.gate_temperature;
 
-            @memset(net.delta[0..layer_last.from], 0);
             // Propagate the delta backwards, layer by layer, and use it to compute the gradient.
             // Inlining this loop ensures that we avoid the inner branch that is only valid for
             // the first layer.
@@ -322,15 +351,18 @@ pub fn Network(comptime options: NetworkOptions) type {
             inline while (l > 0) {
                 l -= 1;
                 const range = layer_ranges[l];
-                for (range.from..range.to()) |j| {
-                    const delta = net.delta[j];
+                const child_deltas  = buffer.front_slice(range.len);
+                const parent_deltas = buffer.back_slice(shape[l]);
+                @memset(parent_deltas, 0);
+                for (child_deltas, range.from..range.to()) |delta, j| {
                     cost_gradient[j] += @as(f32x16, @splat(tau * delta)) * net.gradient[j];
                     if (l != 0) {
                         const parents = net.parents[j];
-                        net.delta[parents[0]] += delta * net.diff[j][0];
-                        net.delta[parents[1]] += delta * net.diff[j][1];
+                        parent_deltas[parents[0]] += delta * net.diff[j][0];
+                        parent_deltas[parents[1]] += delta * net.diff[j][1];
                     }
                 }
+                buffer.swap();
             }
         }
 
@@ -342,7 +374,7 @@ pub fn Network(comptime options: NetworkOptions) type {
         /// Updates the probability distribution, sigma, as softmax of the given logits.
         pub fn setLogits(net: *Self, logits: *[node_count]f32x16) void {
             for (&net.sigma, logits) |*sigma, logit| {
-                sigma.* = if (options.softmax_base_2) softmax2(logit / @as(f32x16, @splat(options.gate_temperature))) else softmax(logit / @as(f32x16, @splat(options.gate_temperature)));
+                sigma.* = if (options.softmax_base_2) softmax2(logit / @as(f32x16, @splat(options.gate_temperature))) else softmax_approx(logit / @as(f32x16, @splat(options.gate_temperature)));
             }
         }
 
@@ -362,10 +394,11 @@ pub fn Network(comptime options: NetworkOptions) type {
         pub fn sequentialize(net: *Self) void {
             inline for (layer_ranges, shape[0 .. shape.len - 1], 0..) |range, dim_prev, l| {
                 const offset = if (l == 0) 0 else range.from - dim_prev;
+                _ = offset;
                 var i: usize = 0;
                 for (net.parents[range.from..range.to()]) |*parents| {
-                    const first = i % dim_prev + offset;
-                    const second = (i + 1) % dim_prev + offset;
+                    const first = i % dim_prev;
+                    const second = (i + 1) % dim_prev;
                     parents.* = .{ @truncate(first), @truncate(second) };
                     i += 2;
                 }
@@ -433,6 +466,7 @@ pub fn Model(comptime options: ModelOptions) type {
                 };
             }
         };
+        const dim_max = @max(std.mem.max(usize, shape), OutputLayer.dim_out);
 
         // The parameters of the network, parameters 0 ... network.parameter_count are reserved for the network,
         // the remaining are for the output layer, if any.
@@ -444,17 +478,15 @@ pub fn Model(comptime options: ModelOptions) type {
         network: Network(.{
             .shape = shape,
         }),
-        layer_input: InputLayer,
-        layer_output: OutputLayer,
         optimizer: Optimizer,
+        buffer: DoubleBuffer(f32, dim_max),
 
         pub const default = Self{
             .parameters = @bitCast(NetworkType.passtrough_biased),
             .gradient = @splat(0),
             .network = .default,
-            .layer_input = undefined,
-            .layer_output = undefined,
             .optimizer = .default,
+            .buffer = .init(0),
         };
 
         /// Returns the mean loss over a dataset.
@@ -478,16 +510,19 @@ pub fn Model(comptime options: ModelOptions) type {
 
         /// Accumulates the gradient backwards.
         pub fn backwardPass(model: *Self, prediction: *const Prediction, label: *const Label) void {
-            Loss.gradient(prediction, label, &model.layer_output.delta);
-            model.layer_output.backwardPass(model.network.lastLayerDelta());
-            model.network.backwardPass(@ptrCast(&model.gradient));
+        	const buffer = &model.buffer;
+        	Loss.gradient(prediction, label, buffer);
+        	OutputLayer.backwardPass(buffer);
+            model.network.backwardPass(@ptrCast(&model.gradient), buffer);
         }
 
         /// Evaluates the model, caching all necessary data to compute the gradient in the backward pass.
         pub fn forwardPass(model: *Self, feature: *const Feature) *const Prediction {
-            const a = model.layer_input.eval(feature);
-            const b = model.network.forwardPass(a);
-            return model.layer_output.forwardPass(b);
+        	const buffer = &model.buffer;
+        	InputLayer.eval(feature, buffer);
+        	_ = model.network.forwardPass(buffer);
+        	const prediction = OutputLayer.forwardPass(buffer);
+        	return prediction;
         }
 
         /// The loss of the model given some input and its expected output.
@@ -497,9 +532,10 @@ pub fn Model(comptime options: ModelOptions) type {
 
         /// Evaluates the model.
         pub fn eval(model: *Self, feature: *const Feature) *const Prediction {
-            const a = model.layer_input.eval(feature);
-            const b = model.network.eval(a);
-            return model.layer_output.eval(b);
+        	const buffer = &model.buffer;
+        	InputLayer.eval(feature, buffer);
+        	_ = model.network.eval(buffer);
+        	return OutputLayer.eval(buffer);
         }
 
         /// Trains the model on a given dataset for a specified amount of epochs and batch size.

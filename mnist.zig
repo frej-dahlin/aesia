@@ -75,13 +75,13 @@ pub fn main() !void {
 
     // Load prior model.
     // It must have been initialized with seed = 0.
-    std.debug.print("Loading latest mnist.model...", .{});
-    const gigabyte = 1_000_000_000;
-    const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
-    defer allocator.free(parameter_bytes);
-    @memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
-    model.network.setLogits(@ptrCast(&model.parameters));
-    std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    //std.debug.print("Loading latest mnist.model...", .{});
+    //const gigabyte = 1_000_000_000;
+    //const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
+    //defer allocator.free(parameter_bytes);
+    //@memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
+    //model.network.setLogits(@ptrCast(&model.parameters));
+    //std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
 
     const training_count = 60_000;
     const validate_count = 10_000;
