@@ -26,43 +26,43 @@ const Range = struct {
 };
 
 pub fn DoubleBuffer(T: type, len: usize) type {
-	return struct {
-		const Self = @This();
-		
-		data: [2 * len]T,
-		half: u1,
-		
-		pub fn init(element: T) Self {
-			return Self{
-				.data = @splat(element),
-				.half = 0,
-			};
-		}
-		
-		pub fn front(buffer: *const Self) *const [len]T {
-			const from = buffer.half * len;
-			const to = from + len;
-			return @ptrCast(buffer.data[from..to]);
-		}
-		
-		pub fn front_slice(buffer: *const Self, comptime slice_len: usize) *const [slice_len]T {
-			return @ptrCast(buffer.front()[0..slice_len]);
-		}
-		
-		pub fn back(buffer: *Self) *[len]T {
-			const from = (buffer.half +% 1) * len;
-			const to = from + len;
-			return @ptrCast(buffer.data[from..to]);
-		}
-		
-		pub fn back_slice(buffer: *Self, comptime slice_len: usize) *[slice_len]T {
-			return @ptrCast(buffer.back()[0..slice_len]);	
-		}
-		
-		pub fn swap(buffer: *Self) void {
-			buffer.half +%= 1;
-		}
-	};
+    return struct {
+        const Self = @This();
+
+        data: [2 * len]T,
+        half: u1,
+
+        pub fn init(element: T) Self {
+            return Self{
+                .data = @splat(element),
+                .half = 0,
+            };
+        }
+
+        pub fn front(buffer: *const Self) *const [len]T {
+            const from = buffer.half * len;
+            const to = from + len;
+            return @ptrCast(buffer.data[from..to]);
+        }
+
+        pub fn front_slice(buffer: *const Self, comptime slice_len: usize) *const [slice_len]T {
+            return @ptrCast(buffer.front()[0..slice_len]);
+        }
+
+        pub fn back(buffer: *Self) *[len]T {
+            const from = (buffer.half +% 1) * len;
+            const to = from + len;
+            return @ptrCast(buffer.data[from..to]);
+        }
+
+        pub fn back_slice(buffer: *Self, comptime slice_len: usize) *[slice_len]T {
+            return @ptrCast(buffer.back()[0..slice_len]);
+        }
+
+        pub fn swap(buffer: *Self) void {
+            buffer.half +%= 1;
+        }
+    };
 }
 
 /// Logits are normalized such that max(logits) == 0.
@@ -229,7 +229,7 @@ pub fn Network(comptime options: NetworkOptions) type {
             assert(dim_out == layer_last.len);
         }
 
-		const NodeIndex = std.math.IntFittingRange(0, std.mem.max(usize, shape));
+        const NodeIndex = std.math.IntFittingRange(0, std.mem.max(usize, shape));
 
         // We use a struct of arrays for cache efficiency.
 
@@ -279,8 +279,8 @@ pub fn Network(comptime options: NetworkOptions) type {
             // This inline for loop avoids two separate for loops with the same body
             // except input being different for the first layer, nodes from 0 to shape[i].
             inline for (layer_ranges, 0..) |range, l| {
-            	const inputs = buffer.front_slice(shape[l]);
-            	const activations = buffer.back_slice(range.len);
+                const inputs = buffer.front_slice(shape[l]);
+                const activations = buffer.back_slice(range.len);
                 for (activations, range.from..range.to()) |*activation, j| {
                     const parents = net.parents[j];
                     const a = inputs[parents[0]];
@@ -299,8 +299,8 @@ pub fn Network(comptime options: NetworkOptions) type {
             @setFloatMode(.optimized);
             // See the comment in eval(...) above for why we loop in this manner.
             inline for (layer_ranges, 0..) |range, l| {
-            	const inputs = buffer.front_slice(shape[l]);
-            	const activations = buffer.back_slice(range.len);
+                const inputs = buffer.front_slice(shape[l]);
+                const activations = buffer.back_slice(range.len);
                 for (activations, range.from..range.to()) |*activation, j| {
                     const parents = net.parents[j];
                     const a = inputs[parents[0]];
@@ -328,7 +328,7 @@ pub fn Network(comptime options: NetworkOptions) type {
                         mix_coef * @as(f32x8, @splat(a * b));
                     const gate = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
 
-					activation.* = @reduce(.Add, sigma * gate);
+                    activation.* = @reduce(.Add, sigma * gate);
                     net.gradient[j] = sigma * (gate - @as(f32x16, @splat(activation.*)));
                 }
                 buffer.swap();
@@ -351,7 +351,7 @@ pub fn Network(comptime options: NetworkOptions) type {
             inline while (l > 0) {
                 l -= 1;
                 const range = layer_ranges[l];
-                const child_deltas  = buffer.front_slice(range.len);
+                const child_deltas = buffer.front_slice(range.len);
                 const parent_deltas = buffer.back_slice(shape[l]);
                 @memset(parent_deltas, 0);
                 for (child_deltas, range.from..range.to()) |delta, j| {
@@ -415,6 +415,44 @@ pub const ModelOptions = struct {
     Optimizer: ?fn (usize) type = null,
     Loss: ?type = null,
     gate_temperature: f32 = 1,
+};
+
+const NetworkOptions = struct {
+	Layers: []const type,
+};
+
+pub fn Network(options: NetworkOptions) type {
+	layers: std.meta.Tuple(options.Layers);
+	const layer_count = options.Layers.len;
+	const parameter_count = blk: {
+		var result: usize = 0;
+		inline for (std.meta.Tuple(options.Layers)) |Layer| result += Layer.dim;
+	};
+	
+	buffer: DoubleBuffer(f32, 
+
+	pub fn forwardPass
+	pub fn backwardPass
+	pub fn preprocess(*[parameter_count]
+};
+
+const Layer = struct {
+	const dim_in: usize;
+	const dim_out: usize;
+	const parameter_count: usize;
+
+	const Self = @This();
+	pub fn eval(self: *Self, 
+	
+	pub fn preProcess(self: *Self, *[parameter_count]f32: parameters) void {
+	
+	}
+	
+	pub fn postProcess(self: *Self, *[parameter_count]f32: parameters) void {
+	
+	}
+	
+	pub fn eval(self: *Self,
 };
 
 /// A model encapsulates a differentiable logic gate network into a machine learning context.
@@ -510,19 +548,19 @@ pub fn Model(comptime options: ModelOptions) type {
 
         /// Accumulates the gradient backwards.
         pub fn backwardPass(model: *Self, prediction: *const Prediction, label: *const Label) void {
-        	const buffer = &model.buffer;
-        	Loss.gradient(prediction, label, buffer);
-        	OutputLayer.backwardPass(buffer);
+            const buffer = &model.buffer;
+            Loss.gradient(prediction, label, buffer);
+            OutputLayer.backwardPass(buffer);
             model.network.backwardPass(@ptrCast(&model.gradient), buffer);
         }
 
         /// Evaluates the model, caching all necessary data to compute the gradient in the backward pass.
         pub fn forwardPass(model: *Self, feature: *const Feature) *const Prediction {
-        	const buffer = &model.buffer;
-        	InputLayer.eval(feature, buffer);
-        	_ = model.network.forwardPass(buffer);
-        	const prediction = OutputLayer.forwardPass(buffer);
-        	return prediction;
+            const buffer = &model.buffer;
+            InputLayer.eval(feature, buffer);
+            _ = model.network.forwardPass(buffer);
+            const prediction = OutputLayer.forwardPass(buffer);
+            return prediction;
         }
 
         /// The loss of the model given some input and its expected output.
@@ -532,10 +570,10 @@ pub fn Model(comptime options: ModelOptions) type {
 
         /// Evaluates the model.
         pub fn eval(model: *Self, feature: *const Feature) *const Prediction {
-        	const buffer = &model.buffer;
-        	InputLayer.eval(feature, buffer);
-        	_ = model.network.eval(buffer);
-        	return OutputLayer.eval(buffer);
+            const buffer = &model.buffer;
+            InputLayer.eval(feature, buffer);
+            _ = model.network.eval(buffer);
+            return OutputLayer.eval(buffer);
         }
 
         /// Trains the model on a given dataset for a specified amount of epochs and batch size.
