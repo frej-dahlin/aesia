@@ -23,44 +23,46 @@ const Range = struct {
     pub fn to(range: Range) usize {
         return range.from + range.len;
     }
+
+    pub fn slice(comptime range: Range, ptr: anytype) @TypeOf(ptr[range.from..range.to()]) {
+        return ptr[range.from..range.to()];
+   }
 };
 
-pub fn DoubleBuffer(T: type, len: usize) type {
+pub fn DoubleBuffer(size: usize, alignment: usize) type {
     return struct {
         const Self = @This();
 
-        data: [2 * len]T,
+        // Ensure that the back half has the same alignment, this is guaranteed if the actual size is divisible
+        // by the alignment.
+        const actual_size = size + alignment - size % alignment;
+        data: [2 * actual_size]u8 align(alignment),
+        /// Encodes which half currently is the front, 0: first half, 1: second half.
         half: u1,
 
-        pub fn init(element: T) Self {
+        pub fn init(element: u8) Self {
             return Self{
                 .data = @splat(element),
                 .half = 0,
             };
         }
 
-        pub fn front(buffer: *const Self) *const [len]T {
-            const from = buffer.half * len;
-            const to = from + len;
-            return @ptrCast(buffer.data[from..to]);
+        pub fn front(buffer: *const Self, T: type) *align(alignment) const T {
+            assert(@sizeOf(T) <= size);
+            const from = buffer.half * actual_size;
+            const to = from + actual_size;
+            return @alignCast(@ptrCast(&buffer.data[from..to]));
         }
 
-        pub fn front_slice(buffer: *const Self, comptime slice_len: usize) *const [slice_len]T {
-            return @ptrCast(buffer.front()[0..slice_len]);
+        pub fn back(buffer: *const Self, T: type) *align(alignment) T {
+            assert(@sizeOf(T) <= size);           
+            const from = (buffer.half +% 1) * actual_size;
+            const to = from + actual_size;
+            return @alignCast(@ptrCast(&buffer.data[from..to]));
         }
 
-        pub fn back(buffer: *Self) *[len]T {
-            const from = (buffer.half +% 1) * len;
-            const to = from + len;
-            return @ptrCast(buffer.data[from..to]);
-        }
-
-        pub fn back_slice(buffer: *Self, comptime slice_len: usize) *[slice_len]T {
-            return @ptrCast(buffer.back()[0..slice_len]);
-        }
-
-        pub fn swap(buffer: *Self) void {
-            buffer.half +%= 1;
+        pub fn flip(buffer: *Self) void {
+            buffer.half +%= 1;    
         }
     };
 }
@@ -177,6 +179,140 @@ const Gate = struct {
 };
 
 const NetworkOptions = struct {
+    Layers: []const type,
+    parameter_alignment: usize = 64,
+};
+
+pub fn Network(options: NetworkOptions) type {
+    // Fixme: More compile time sanity check the Layers.
+    const Layers = std.meta.Tuple(options.Layers);
+    const parameter_count = blk: {
+        var result: usize = 0;
+        inline for (Layers) |Layer| result += Layer.parameter_count;
+        break :blk result;
+    };
+    const layer_count = Layers.len;
+    const Input = Layers[0].Input;
+    const Output = Layers[layer_count].Output;
+    inline for (Layers[0..layer_count - 1], Layers[1..]) |prev, next| {
+        if (prev.Output != next.Input) @compileError("Layers " ++ @typeName(prev) ++ " and " ++ @typeName(next) ++ " have non matching input & output types.");
+    }
+    const align_max = blk: {
+        var max: usize = 0;
+        inline for (Layers, 0..) |Layer, l| {
+            max = @max(max, @alignOf(Layer.Output));
+        }
+        break :blk max;
+    };
+    const size_max = blk: {
+        var max: usize = 0;
+        inline for (Layers, 0..) |Layer, l| {
+            max = @max(max, @sizeOf(Layer.Output));
+        }
+        break :blk max;
+    };
+
+    return struct {
+        self: *Self,
+        layers: Layers,
+        gradient: [parameter_count]f32 align(options.parameter_alignment),
+        /// A network is evaluated layer by layer, either forwards or backwards.
+        /// In either case one only needs to store the result of the previous
+        /// layer's computation and pass it to the next. A double buffer facilitates this.
+        buffer: DoubleBuffer(size_max, align_max),
+
+        /// Evaluates the network, layer by layer.
+        pub fn eval(self: *const Self, input: *const Input, buffer: *Buffer) *const Output {
+            const buffer = &self.buffer;
+            inline for (self.layers, 0..) |layer, l| {
+                const layer_input = if (l == 0) input else buffer.front(layer.Input);
+                const layer_output = buffer.back(layer.Output);
+                layer.eval(layer_input, layer_output);
+                buffer.flip();
+            }
+            return buffer.front(Output);
+        }
+
+        /// The network does *not* always own its parameters.
+        /// The design of this mechanism has three reasons:
+        /// 1. Enabling amortization of expensive operations over the number of evaluations
+        ///    inbetween. For example logic layers need to compute softmax of its parameters,
+        ///    when training this cost is amortized over the batch size.
+        /// 2. A model can ultimately own the parameters in a big flat array. This makes
+        ///    the step part of gradient descent trivial to implement.
+        /// 3. Each thread can own a separate network that is used for parallel computations,
+        ///    while sharing the paremeters with the other threads. The main thread owns the
+        ///    parameters and should call (take|give)Parameters, the worker threads instead
+        ///    call (borrow|return)Parameters, but only *after* the main thread has succesfully
+        ///    taken/given them.
+        /// Takes ownership of an array of parameters, preprocessing them, if necessary.
+        pub fn takeParameters(self: *Self, parameters: *[parameter_count]f32) void {
+            inline for (self.layers, parameter_ranges) |layer, range| {
+                if (layer.parameter_count > 0) layer.takeParameters(range.slice(parameters));
+            }
+        }
+
+        /// Gives the parameters back, postprocessing them, if necessary.
+        pub fn giveParameters(self: *Self) void {
+            inline for (self.layers, parameter_range) |layer, range| {
+                if (layer.parameter_count > 0) layer.giveParameters();
+            }
+        }
+
+        /// Borrows parameters, without preprocessing, called by worker threads after the
+        /// main thread has called takeParameters.
+        pub fn borrowParameters(self: *Self, parameters: *[parameter_count]f32) void {
+            inline for (self.layers, parameter_range) |*layer, range| {
+                if (layer.parameter_count > 0) layer.borrowParameters();
+            }
+        }
+
+        /// Returns parameters, without postprocessing, called by worker threads after the
+        /// main thread has called giveParameters.
+        pub fn returnParameters(self: *Self) void {
+            inline for (self.layers) |*layer| {
+                if (layer.parameter_count > 0) layer.returnParameters();
+            }
+        }
+
+        /// Evaluates the network and caches relevant data it needs for the backward pass.
+        pub fn forwardPass(self: *Self, input: *const Input) *const Output {
+            const buffer = &self.buffer;
+            inline for (self.layers, 0..) |*layer, l| {
+                const layer_input = if (l == 0) input else buffer.front(layer.Input);
+                const layer_output = buffer.back(layer.Output);
+                layer.forwardPass(layer_input, layer_output);
+                buffer.flip();
+            }
+            return buffer.front(Output);
+        }
+
+        /// Accumulates the network's gradient backwards, layer by layer. Every layer passes its delta,
+        /// the derivative of the loss function with respect to its activations, backwards through the buffer.
+        /// This is called backpropagation.
+        /// The caller is responsible for filling the network's buffer with the delta for the last layer.
+        /// A pointer to an array of correct length is given by lastDeltaBuffer().
+        pub fn backwardPass(self: *Self, buffer: *Buffer) void {
+            comptime var l: usize = layer_count;
+            inline while (l > 0) {
+                l -= 1;
+                const layer = self.layers[l];
+                const input = buffer.front([layer.output_dim]f32);
+                const output = buffer.back([layer.input_dim]f32);
+                const gradient = parameter_ranges[l].slice(self.gradient);
+                layer.backwardPass(gradient, input, output);
+                buffer.flip();
+            }
+        }
+
+        /// Returns the correct memory region to put the delta of the last layer before calling backwardPass.
+        pub fn lastDeltaBuffer(self: *Self) *[last_layer.output_dim]f32 {
+            return self.buffer.front([last_layer.output_dim]f32);
+        }
+    };
+}      
+
+const NetworkOptions = struct {
     shape: []const usize,
     softmax_base_2: bool = false,
     gate_temperature: f32 = 1.0,
@@ -287,7 +423,7 @@ pub fn Network(comptime options: NetworkOptions) type {
                     const b = inputs[parents[1]];
                     activation.* = @reduce(.Add, net.sigma[j] * Gate.vector(a, b));
                 }
-                buffer.swap();
+                buffer.flip();
             }
             return buffer.front_slice(layer_last.len);
         }
@@ -331,7 +467,7 @@ pub fn Network(comptime options: NetworkOptions) type {
                     activation.* = @reduce(.Add, sigma * gate);
                     net.gradient[j] = sigma * (gate - @as(f32x16, @splat(activation.*)));
                 }
-                buffer.swap();
+                buffer.flip();
             }
             return buffer.front_slice(layer_last.len);
         }
@@ -362,7 +498,7 @@ pub fn Network(comptime options: NetworkOptions) type {
                         parent_deltas[parents[1]] += delta * net.diff[j][1];
                     }
                 }
-                buffer.swap();
+                buffer.flip();
             }
         }
 
