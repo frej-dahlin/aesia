@@ -1,27 +1,28 @@
 const std = @import("std");
 
 const dlg = @import("dlg.zig");
-const LogicGates = dlg.LogicGates;
+const Logic = dlg.Logic;
 
 // zig fmt: off
-const Network = dlg.Network(.{
-     .Layers = &.{
-          LogicGates(.{ .input_dim = 784, .output_dim = 16_000, .seed = 0 }),
-          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 1 }),
-          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 2 }),
-          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 3 }),
-          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 4 }),
-          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 5 }),
-          LogicGates(.{ .input_dim = 16_000, .output_dim = 10, .seed = 6 }),
-    }
-});
+// 
+const Model = dlg.Model(&.{
+      Logic(.{ .input_dim = 784,    .output_dim = 16_000, .seed = 0 }),
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 1 }),
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 2 }),
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 3 }),
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 4 }),
+      Logic(.{ .input_dim = 16_000, .output_dim = 10,     .seed = 5 }),
+}, .default);
 // zig fmt: on
 
-var network: Network = undefined;
+var model: Model = undefined;
+
+const count = 1000;
 
 pub fn main() !void {
-    var parameters: [Network.parameter_count]f32 align(64) = @splat(0);
-    const input: [784]f32 = @splat(0);
-    network.takeParameters(&parameters);
-    for (0..1000) |_| _ = network.eval(&input);
+    const features: [count][784]f32 = undefined;
+    const labels: [count][10]f32 = undefined;
+    var timer = try std.time.Timer.start();
+    model.train(.init(&features, &labels), .init(&features, &labels), 1, 32);
+    std.debug.print("{d}ms\n", .{timer.read() / std.time.ns_per_ms});
 }

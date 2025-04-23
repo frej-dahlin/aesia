@@ -35,7 +35,11 @@ pub fn DoubleBuffer(size: usize, alignment: usize) type {
 
         // Ensure that the back half has the same alignment, this is guaranteed if the actual size is divisible
         // by the alignment.
-        const actual_size = size + alignment - size % alignment;
+        comptime {
+            assert(size >= alignment);
+        }
+        const padding = (size - alignment) % alignment;
+        const actual_size = size + padding;
         data: [2 * actual_size]u8 align(alignment),
         /// Encodes which half currently is the front, 0: first half, 1: second half.
         half: u1,
@@ -185,54 +189,77 @@ const Gate = struct {
     }
 };
 
-const NetworkOptions = struct {
-    Layers: []const type,
-    parameter_alignment: usize = 64,
-};
-
-pub fn Network(options: NetworkOptions) type {
-    const Layers = options.Layers;
+pub fn Network(Layers: []const type) type {
     inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
         if (prev.Output != next.Input) @compileError("Layers " ++ @typeName(prev) ++ " and " ++ @typeName(next) ++ " have non matching input & output types.");
     }
     return struct {
         const Self = @This();
 
-        // Fixme: More compile time sanity check the Layers.
-        pub const parameter_count = blk: {
-            var result: usize = 0;
-            for (Layers) |Layer| result += Layer.parameter_count;
-            break :blk result;
-        };
-        const Input = Layers[0].Input;
-        const LastLayer = Layers[Layers.len - 1];
-        const Output = LastLayer.Output;
-        const align_max = blk: {
+        // Fixme: Compile time sanity check the Layers.
+
+        // The following parameter computations are necessary if the layer uses SIMD vectors.
+        // For example @Vector(16, f32) has a natural alignment of 64 *not* 4. So if one layer
+        // uses 13 parameters and the next relies on SIMD computations, then the alignment is screwed up.
+        // We simply pad the parameters inbetween with some extra unused parameters.
+        pub const parameter_alignment = blk: {
             var max: usize = 0;
-            for (Layers) |Layer| max = @max(max, @alignOf(Layer.Output));
-            break :blk max;
-        };
-        const size_max = blk: {
-            var max: usize = 0;
-            for (Layers) |Layer| max = @max(max, @sizeOf(Layer.Output));
+            for (Layers) |Layer| {
+                if (Layer.parameter_count > 0) max = @max(max, Layer.parameter_alignment);
+            }
             break :blk max;
         };
         const parameter_ranges = blk: {
             var offset: usize = 0;
             var ranges: [Layers.len]Range = undefined;
             for (&ranges, Layers) |*range, Layer| {
-                range.* = Range{ .from = offset, .len = Layer.parameter_count };
-                offset = range.to();
+                // We branch here so that parameterless layers do not need to declare all parameter info.
+                if (Layer.parameter_count == 0) {
+                    range.* = Range{ .from = offset, .len = 0 };
+                    continue;
+                } else {
+                    // In this branch we need to pad with some f32.
+                    const alignment = Layer.parameter_alignment;
+                    assert(alignment % @alignOf(f32) == 0);
+                    // Fixme: Compute directly instead of this stupid loop.
+                    while ((@alignOf(f32) * offset) % alignment != 0) {
+                        offset += 1;
+                    }
+                    range.* = Range{ .from = offset, .len = Layer.parameter_count };
+                    offset += range.len;
+                }
             }
             break :blk ranges;
         };
+        // Parameter count, padding included, overallocate for SIMD operations.
+        pub const parameter_count = blk: {
+            var len: usize = parameter_ranges[Layers.len - 1].to();
+            const vector_len = std.simd.suggestVectorLength(f32) orelse 1;
+            while (len % vector_len != 0) len += 1;
+            break :blk len;
+        };
+        const Input = Layers[0].Input;
+        pub const input_dim = Layers[0].input_dim;
+        const LastLayer = Layers[Layers.len - 1];
+        pub const output_dim = LastLayer.output_dim;
+        const Output = LastLayer.Output;
+        const buffer_alignment = blk: {
+            var max: usize = 0;
+            for (Layers) |Layer| max = @max(max, @alignOf(Layer.Output));
+            break :blk max;
+        };
+        const buffer_size = blk: {
+            var max: usize = 0;
+            for (Layers) |Layer| max = @max(max, @sizeOf(Layer.Output));
+            break :blk max;
+        };
 
         layers: std.meta.Tuple(Layers),
-        gradient: [parameter_count]f32 align(options.parameter_alignment),
+        gradient: [parameter_count]f32 align(parameter_alignment),
         /// A network is evaluated layer by layer, either forwards or backwards.
         /// In either case one only needs to store the result of the previous
         /// layer's computation and pass it to the next. A double buffer facilitates this.
-        buffer: DoubleBuffer(size_max, align_max),
+        buffer: DoubleBuffer(buffer_size, buffer_alignment),
 
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
@@ -260,15 +287,16 @@ pub fn Network(options: NetworkOptions) type {
         ///    taken/given them.
         /// Takes ownership of an array of parameters, preprocessing them, if necessary.
         pub fn takeParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (Layers, &self.layers, parameter_ranges) |Layer, *layer, range| {
-                if (Layer.parameter_count > 0) layer.takeParameters(range.slice(f32, parameters));
+            inline for (&self.layers, parameter_ranges) |*layer, range| {
+                const slice = range.slice(f32, parameters);
+                if (range.len > 0) layer.takeParameters(@alignCast(@ptrCast(slice)));
             }
         }
 
         /// Gives the parameters back, postprocessing them, if necessary.
         pub fn giveParameters(self: *Self) void {
-            inline for (self.layers) |layer| {
-                if (layer.parameter_count > 0) layer.giveParameters();
+            inline for (Layers, &self.layers) |Layer, *layer| {
+                if (Layer.parameter_count > 0) layer.giveParameters();
             }
         }
 
@@ -276,7 +304,8 @@ pub fn Network(options: NetworkOptions) type {
         /// main thread has called takeParameters.
         pub fn borrowParameters(self: *Self, parameters: *[parameter_count]f32) void {
             inline for (self.layers, parameter_ranges) |*layer, range| {
-                if (layer.parameter_count > 0) layer.borrowParameters(range.slice(parameters));
+                const slice = range.slice(f32, &parameters);
+                if (range.len > 0) layer.borrowParameters(@alignCast(@ptrCast(slice)));
             }
         }
 
@@ -288,13 +317,21 @@ pub fn Network(options: NetworkOptions) type {
             }
         }
 
+        pub fn initParameters(self: *Self, parameters: *[parameter_count]f32) void {
+            inline for (Layers, self.layers, parameter_ranges) |Layer, layer, range| {
+                const slice = range.slice(f32, parameters);
+                if (Layer.parameter_count > 0) layer.initParameters(@alignCast(@ptrCast(slice)));
+            }
+        }
+
         /// Evaluates the network and caches relevant data it needs for the backward pass.
         pub fn forwardPass(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
-            inline for (self.layers, 0..) |*layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(layer.Input);
-                const layer_output = buffer.back(layer.Output);
-                layer.forwardPass(layer_input, layer_output);
+            inline for (Layers, &self.layers, parameter_ranges, 0..) |Layer, *layer, range, l| {
+                const layer_input = if (l == 0) input else buffer.front(Layer.Input);
+                const gradient = range.slice(f32, &self.gradient);
+                const layer_output = buffer.back(Layer.Output);
+                layer.forwardPass(layer_input, @alignCast(@ptrCast(gradient)), layer_output);
                 buffer.flip();
             }
             return buffer.front(Output);
@@ -304,29 +341,30 @@ pub fn Network(options: NetworkOptions) type {
         /// the derivative of the loss function with respect to its activations, backwards through the buffer.
         /// This is called backpropagation.
         /// The caller is responsible for filling the network's buffer with the delta for the last layer.
-        /// A pointer to an array of correct length is given by lastDeltaBuffer().
+        /// A pointer to the correct memory region is given by lastDeltaBuffer().
         pub fn backwardPass(self: *Self) void {
             const buffer = &self.buffer;
             comptime var l: usize = Layers.len;
             inline while (l > 0) {
                 l -= 1;
-                const layer = self.layers[l];
-                const input = buffer.front([layer.output_dim]f32);
-                const output = buffer.back([layer.input_dim]f32);
-                const gradient = parameter_ranges[l].slice(self.gradient);
-                layer.backwardPass(input, gradient, output);
+                const Layer = Layers[l];
+                const layer = &self.layers[l];
+                const input = buffer.front([Layer.output_dim]f32);
+                const output = buffer.back([Layer.input_dim]f32);
+                const gradient = parameter_ranges[l].slice(f32, &self.gradient);
+                layer.backwardPass(input, @alignCast(@ptrCast(gradient)), output);
                 buffer.flip();
             }
         }
 
         /// Returns the correct memory region to put the delta of the last layer before calling backwardPass.
         pub fn lastDeltaBuffer(self: *Self) *[LastLayer.output_dim]f32 {
-            return self.buffer.front([LastLayer.output_dim]f32);
+            return self.buffer.back([LastLayer.output_dim]f32);
         }
     };
 }
 
-pub const LogicGatesOptions = struct {
+pub const LogicOptions = struct {
     input_dim: usize,
     output_dim: usize,
     seed: u64,
@@ -339,7 +377,7 @@ pub fn LCG32(multiplier: u32, increment: u32, initial_seed: u32) type {
 
         pub const default = Self{ .seed = initial_seed };
 
-        pub fn next(self: *Self) u32 {
+        pub inline fn next(self: *Self) u32 {
             self.seed *%= multiplier;
             self.seed +%= increment;
             return self.seed;
@@ -351,7 +389,7 @@ pub fn LCG32(multiplier: u32, increment: u32, initial_seed: u32) type {
     };
 }
 
-pub fn LogicGates(options: LogicGatesOptions) type {
+pub fn Logic(options: LogicOptions) type {
     return struct {
         const Self = @This();
         pub const input_dim = options.input_dim;
@@ -360,10 +398,10 @@ pub fn LogicGates(options: LogicGatesOptions) type {
         pub const Output = [output_dim]f32;
         const node_count = output_dim;
         pub const parameter_count = 16 * node_count;
+        pub const parameter_alignment = 64;
 
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: ?*[node_count]f32x16,
-        gradient: [node_count]f32x16,
         diff: [node_count][2]f32,
         /// Generates the random inputs on-the-fly.
         lcg: LCG32(1664525, 1013904223, options.seed),
@@ -376,6 +414,8 @@ pub fn LogicGates(options: LogicGatesOptions) type {
         };
 
         pub fn eval(self: *Self, input: *const Input, output: *Output) void {
+            @setFloatMode(.optimized);
+            assert(self.sigma != null);
             self.lcg.reset();
             for (self.sigma.?, output) |sigma, *activation| {
                 const a = input[self.lcg.next() % input_dim];
@@ -384,296 +424,247 @@ pub fn LogicGates(options: LogicGatesOptions) type {
             }
         }
 
-        pub fn forwardPass(self: *Self, input: *const Input, output: *Output) void {
+        pub fn forwardPass(self: *Self, input: *const Input, gradient: *[node_count]f32x16, output: *Output) void {
+            @setFloatMode(.optimized);
+            assert(self.sigma != null);
             self.lcg.reset();
-            for (self.sigma.?, &self.gradient, &self.diff, output) |sigma, *partial, *diff, *activation| {
+            for (self.sigma.?, gradient, &self.diff, output) |sigma, *partial, *diff, *activation| {
                 const a = input[self.lcg.next() % input_dim];
                 const b = input[self.lcg.next() % input_dim];
-                const gate_vector = Gate.vector(a, b);
+
+                // Inline construction of Gate.vector(a, b), Gate.diff_a(b), and Gate.diff_b(a).
+                // We do it in this way since all three depend on mix_coef, and two out of three
+                // depend on a_coef/b_coef.
+                const a_coef: f32x8 = .{ 0, 0, 1, 1, 0, 0, 1, 1 };
+                const b_coef: f32x8 = .{ 0, 0, 0, 0, 1, 1, 1, 1 };
+                const mix_coef: f32x8 = .{ 0, 1, -1, 0, -1, 0, -2, -1 };
+
+                // All three desired vectors have halfway symmetry so we only
+                // explicitly construct the first half.
+                const diff_a_half = a_coef + mix_coef * @as(f32x8, @splat(b));
+                const diff_b_half = b_coef + mix_coef * @as(f32x8, @splat(a));
+                diff.* = .{
+                    @reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
+                    @reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
+                };
+                const gate_half =
+                    a_coef * @as(f32x8, @splat(a)) +
+                    b_coef * @as(f32x8, @splat(b)) +
+                    mix_coef * @as(f32x8, @splat(a * b));
+                const gate_vector = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
+
                 activation.* = @reduce(.Add, sigma * gate_vector);
                 partial.* = sigma * (gate_vector - @as(f32x16, @splat(activation.*)));
-                diff.* = .{
-                    @reduce(.Add, sigma * Gate.diff_a(b)),
-                    @reduce(.Add, sigma * Gate.diff_b(a)),
-                };
             }
         }
 
         /// Todo: Create a function "backward" that does not pass delta backwards, applicable for
         /// the first layer in a network only.
-        pub fn backwardPass(self: *Self, input: *[output_dim]f32, parameter_gradient: *[parameter_count]f32, output: *[input_dim]f32) void {
+        pub fn backwardPass(self: *Self, input: *const [output_dim]f32, gradient: *[node_count]f32x16, output: *[input_dim]f32) void {
+            @setFloatMode(.optimized);
             self.lcg.reset();
             @memset(output, 0);
-            for (self.gradient, self.diff, @as(*[node_count]f32x16, @ptrCast(parameter_gradient)), input) |partial, diff, *parameter_partial, delta| {
+            for (self.diff, gradient, input) |diff, *partial, delta| {
                 const parent_a = self.lcg.next() % input_dim;
                 const parent_b = self.lcg.next() % input_dim;
                 output[parent_a] += delta * diff[0];
                 output[parent_b] += delta * diff[1];
-                parameter_partial.* = @as(f32x16, @splat(delta)) * partial;
+                partial.* = @as(f32x16, @splat(delta));
             }
         }
 
-        pub fn takeParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            // Fixme: Handle differing parameter alignments gracefully.
-            //        It is completely OK to pad inbetween layers if necessary.
-            //        The following will crash the software unless the parameters have align(64).
-            self.sigma = @alignCast(@ptrCast(parameters));
+        pub fn takeParameters(self: *Self, parameters: *[node_count]f32x16) void {
+            @setFloatMode(.optimized);
+            assert(self.sigma == null);
+            self.sigma = parameters;
             for (self.sigma.?) |*sigma| sigma.* = softmax(sigma.*);
         }
 
         pub fn giveParameters(self: *Self) void {
-            for (self.sigma) |*sigma| sigma.* = softmaxInverse(sigma);
+            assert(self.sigma != null);
+            for (self.sigma.?) |*sigma| sigma.* = softmaxInverse(sigma.*);
             self.sigma = null;
         }
 
-        pub fn borrowParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            self.sigma = @ptrCast(parameters);
+        pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
+            assert(self.sigma == null);
+            self.sigma = parameters;
         }
 
         pub fn returnParameters(self: *Self) void {
+            assert(self.sigma != null);
             self.sigma = null;
+        }
+
+        pub fn initParameters(_: *const Self, parameters: *[node_count]f32x16) void {
+            // Initialize to be biased toward the two passthrough gates.
+            parameters.* = @splat(.{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10);
         }
     };
 }
 
-/// A network of differentiable logic gates.
-pub fn NetworkOld(comptime options: NetworkOptions) type {
-    const shape = options.shape;
+pub const ModelOptions = struct {
+    Optimizer: ?fn (usize) type,
+    Loss: ?type,
 
-    // Assert validity of the shape array.
-    if (shape.len < 2) @compileError("options.shape: at least dimensions are required, an input and output");
-    for (shape) |dim| if (dim == 0) @compileError("options.shape: all dimensions need to be nonzero");
-    for (shape[0 .. shape.len - 1], shape[1..]) |dim, next| {
-        if (2 * next < dim) @compileError("options.shape: not allowed to shrink dimensions by factor > 2");
+    pub const default = ModelOptions{
+        .Optimizer = null,
+        .Loss = null,
+    };
+};
+
+// zig fmt: off
+pub fn Model(Layers: []const type, options: ModelOptions) type {
+    const NetworkType = Network(Layers);
+    const parameter_count = NetworkType.parameter_count;
+    const vector_len = std.simd.suggestVectorLength(f32) orelse 1;
+    const ParameterVector = @Vector(vector_len, f32);
+    comptime {
+        assert(parameter_count % vector_len == 0);
     }
-
+    const parameter_alignment = @max(
+        NetworkType.parameter_alignment,
+        @alignOf(@Vector(vector_len, f32))
+    );
     return struct {
         const Self = @This();
 
-        // The following constants are created to deal with the flat struct of arrays architecture
-        // Doing it in this manner allows for 0 overhead in memory.
-        const layer_count = shape.len - 1;
-        // Allows for looping over the network layer by layer in a simple manner.
-        const layer_ranges: [layer_count]Range = blk: {
-            var ranges: [layer_count]Range = undefined;
-            var offset: usize = 0;
-            for (&ranges, shape[1..]) |*range, dim| {
-                range.* = .{ .from = offset, .len = dim };
-                offset += dim;
+        pub const Feature = NetworkType.Input;
+        pub const input_dim = NetworkType.input_dim;
+        pub const Prediction = NetworkType.Output;
+        pub const output_dim = NetworkType.output_dim;
+        pub const Optimizer = (if (options.Optimizer) |O| O else optim.Adam(.default))(parameter_count);
+        pub const Loss = (if (options.Loss) |L| L else loss_function.HalvedMeanSquareError)(output_dim);
+        pub const Label = Loss.Label;
+
+        pub const Dataset = struct {
+            features: []const Feature,
+            labels: []const Label,
+
+            pub const empty = Dataset{ .features = &.{}, .labels = &.{} };
+
+            pub fn len(dataset: Dataset) usize {
+                assert(dataset.features.len == dataset.labels.len);
+                return dataset.features.len;
             }
-            break :blk ranges;
-        };
-        const layer_last = layer_ranges[layer_count - 1];
 
-        // The number of total nodes in the network.
-        pub const node_count = layer_last.to();
-        // Each node is in a superposition of 16 possible logic gates;
-        pub const parameter_count = Gate.count * node_count;
-        // Default logits that result in a bias to the passthrough gates.
-        // This stabilizes training of the network.
-        pub const passtrough_biased: [node_count]f32x16 = @splat(.{ 0, 0, 0, 16, 0, 16 } ++ .{0} ** 10);
+            pub fn init(features: []const Feature, labels: []const Label) Dataset {
+                assert(features.len == labels.len);
+                return .{
+                    .features = features,
+                    .labels = labels,
+                };
+            }
 
-        // The network does not have a layer with shape[0] number of nodes. But rather the first layer,
-        // nodes from 0 .. shape[1] will have parent indices that range from 0 .. shape[0], which is
-        // the dimension of the input.
-        const dim_in = shape[0];
-        // The last layer
-        const dim_out = shape[shape.len - 1];
-        comptime {
-            assert(dim_out == layer_last.len);
-        }
-
-        const NodeIndex = std.math.IntFittingRange(0, std.mem.max(usize, shape));
-
-        // We use a struct of arrays for cache efficiency.
-
-        // The probability distribution of each logic gate.
-        // These are derived from a vector of 16 parameters called a logit vector,
-        // which are *not* stored, using the formula sigma = softmax(logit).
-        // We do it in this way for two reasons:
-        // 1. Computing softmax is expensive, however, its cost is amortized over the number
-        //    of evaluations between every update. So training the network with
-        //    a decent batch size (say 16+) ensures that the preprocessing required
-        //    is negligble.
-        // 2. Decoupling the logits from the network allows for it to fit into a
-        //    more complex model more easily. The model can own all parameters,
-        //    including logits and potentially others, in a single flat array.
-        sigma: [node_count]f32x16 align(64),
-
-        // The gradient of the node's value with respect to its logit vector.
-        gradient: [node_count]f32x16 align(64),
-
-        // The derivative of the node's value with respect to each respective input.
-        diff: [node_count][2]f32 align(64),
-
-        // The indices of the node's parents, for the first layer i.e. nodes 0..shape[1] these
-        // are instead indices into the input.
-        // Note: These can be entirely optimized away. Using a reversible LCG one can generate
-        // the indices using a fixed seed. Additionally one can safely assume that the j:th
-        // node in the l:th layer is the parent of the j:th (possibly wrapping) node in l+1:th layer.
-        // In this way we guarantee that each node has children. To do generally will be quite tricky,
-        // especially if avoiding modulo operations. Instead of n % range, one can do use a multiply
-        // followed by a shift. See the blog post: https://lemire.me/blog/2016/06/30/fast-random-shuffling/
-        // It is worth the effort, since then the data structure can be truly static, no dynamic initialization.
-        parents: [node_count][2]NodeIndex align(64),
-
-        // A default network with uniform probabilities for each gate.
-        // Before using the network on must call randomizeConnections to
-        // initialize every node's parents.
-        pub const default = Self{
-            .sigma = @splat(@splat(1.0 / 16.0)),
-            .gradient = @splat(@splat(0)),
-            .diff = @splat(.{ 0, 0 }),
-            .parents = @splat(.{ 0, 0 }),
+            pub fn slice(dataset: Dataset, from: usize, to: usize) Dataset {
+                assert(from <= to);
+                return .{
+                    .features = dataset.features[from..to],
+                    .labels = dataset.labels[from..to],
+                };
+            }
         };
 
-        /// Evaluates the network.
-        pub fn eval(net: *Self, buffer: anytype) *const [dim_out]f32 {
+        network: NetworkType,
+        parameters: [parameter_count]f32 align(parameter_alignment),        
+        gradient: [parameter_count]f32 align(parameter_alignment),
+        optimizer: Optimizer,
+        parameters_locked: bool,
+
+        pub fn init() Self {
+            var model = Self{
+                .network = undefined,
+                .parameters = @splat(0),
+                .optimizer = .default,
+            };
+            model.network.initParameters(&model.parameters);
+        }
+
+        // Not thread safe unless you know the parameter_lock is true.
+        pub fn eval(model: *Self, input: *const Feature) *const Prediction {
+            if (!model.parameters_locked) {
+                model.network.takeParameters(&model.parameters);
+                model.parameters_locked = true;
+            }
+            return model.network.eval(input);
+        }
+
+        pub fn forwardPass(model: *Self, feature: *const Feature) *const Prediction {
+            assert(model.parameters_locked);
+            return model.network.forwardPass(feature);
+        }
+
+        pub fn backwardPass(model: *Self) void {
+            assert(model.parameters_locked);
+            return model.network.backwardPass();
+        }
+
+        pub fn lock(model: *Self) void {
+            assert(!model.parameters_locked);
+            model.network.takeParameters(&model.parameters);
+            model.parameters_locked = true;
+        }
+
+        pub fn unlock(model: *Self) void {
+            assert(model.parameters_locked);
+            model.network.giveParameters();
+            model.parameters_locked = false;
+        }
+
+        pub fn loss(model: *Self, feature: *const Feature, label: *const Label) f32 {
+            assert(model.parameters_locked);
+            return Loss.eval(model.eval(feature), label);
+        }
+
+        /// Returns the mean loss over a dataset.
+        pub fn cost(model: *Self, dataset: Dataset) f32 {
+            assert(dataset.len() > 0);
+            assert(model.parameters_locked);
+            var result: f32 = 0;
+            for (dataset.features, dataset.labels) |feature, label| result += model.loss(&feature, &label);
+            return result / @as(f32, @floatFromInt(dataset.len()));
+        }
+
+        pub fn differentiate(model: *Self, dataset: Dataset) void {
             @setFloatMode(.optimized);
-            // This inline for loop avoids two separate for loops with the same body
-            // except input being different for the first layer, nodes from 0 to shape[i].
-            inline for (layer_ranges, 0..) |range, l| {
-                const inputs = buffer.front_slice(shape[l]);
-                const activations = buffer.back_slice(range.len);
-                for (activations, range.from..range.to()) |*activation, j| {
-                    const parents = net.parents[j];
-                    const a = inputs[parents[0]];
-                    const b = inputs[parents[1]];
-                    activation.* = @reduce(.Add, net.sigma[j] * Gate.vector(a, b));
-                }
-                buffer.flip();
-            }
-            return buffer.front_slice(layer_last.len);
-        }
-
-        /// Evaluates the network and caches the relevant data for the
-        /// backwardPass: diff and the gradient, which is later correctly
-        /// scaled during the backward pass.
-        pub fn forwardPass(net: *Self, buffer: anytype) *const [dim_out]f32 {
-            @setFloatMode(.optimized);
-            // See the comment in eval(...) above for why we loop in this manner.
-            inline for (layer_ranges, 0..) |range, l| {
-                const inputs = buffer.front_slice(shape[l]);
-                const activations = buffer.back_slice(range.len);
-                for (activations, range.from..range.to()) |*activation, j| {
-                    const parents = net.parents[j];
-                    const a = inputs[parents[0]];
-                    const b = inputs[parents[1]];
-                    const sigma = net.sigma[j];
-
-                    // Inline construction of Gate.vector(a, b), Gate.diff_a(b), and Gate.diff_b(a).
-                    // We do it in this way since all three depend on mix_coef, and two out of three
-                    // depend on a_coef/b_coef.
-                    const a_coef: f32x8 = .{ 0, 0, 1, 1, 0, 0, 1, 1 };
-                    const b_coef: f32x8 = .{ 0, 0, 0, 0, 1, 1, 1, 1 };
-                    const mix_coef: f32x8 = .{ 0, 1, -1, 0, -1, 0, -2, -1 };
-
-                    // All three desired vectors have halfway symmetry so we only
-                    // explicitly construct the first half.
-                    const diff_a_half = a_coef + mix_coef * @as(f32x8, @splat(b));
-                    const diff_b_half = b_coef + mix_coef * @as(f32x8, @splat(a));
-                    net.diff[j] = .{
-                        @reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
-                        @reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
-                    };
-                    const gate_half =
-                        a_coef * @as(f32x8, @splat(a)) +
-                        b_coef * @as(f32x8, @splat(b)) +
-                        mix_coef * @as(f32x8, @splat(a * b));
-                    const gate = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
-
-                    activation.* = @reduce(.Add, sigma * gate);
-                    net.gradient[j] = sigma * (gate - @as(f32x16, @splat(activation.*)));
-                }
-                buffer.flip();
-            }
-            return buffer.front_slice(layer_last.len);
-        }
-
-        /// Accumulates the loss gradient to the cost gradient with respect to the network's logits.
-        /// One must first call forwardPass to cache the relevant data.
-        pub fn backwardPass(net: *Self, cost_gradient: *[node_count]f32x16, buffer: anytype) void {
-            @setFloatMode(.optimized);
-
-            // Compensating factor for the softmax temperature.
-            const tau = (if (options.softmax_base_2) @log(2.0) else 1.0) / options.gate_temperature;
-
-            // Propagate the delta backwards, layer by layer, and use it to compute the gradient.
-            // Inlining this loop ensures that we avoid the inner branch that is only valid for
-            // the first layer.
-            comptime var l: usize = layer_count;
-            inline while (l > 0) {
-                l -= 1;
-                const range = layer_ranges[l];
-                const child_deltas = buffer.front_slice(range.len);
-                const parent_deltas = buffer.back_slice(shape[l]);
-                @memset(parent_deltas, 0);
-                for (child_deltas, range.from..range.to()) |delta, j| {
-                    cost_gradient[j] += @as(f32x16, @splat(tau * delta)) * net.gradient[j];
-                    if (l != 0) {
-                        const parents = net.parents[j];
-                        parent_deltas[parents[0]] += delta * net.diff[j][0];
-                        parent_deltas[parents[1]] += delta * net.diff[j][1];
-                    }
-                }
-                buffer.flip();
-            }
-        }
-
-        /// Returns the delta of the last layer.
-        pub fn lastLayerDelta(net: *Self) *[layer_last.len]f32 {
-            return net.delta[layer_last.from..];
-        }
-
-        /// Updates the probability distribution, sigma, as softmax of the given logits.
-        pub fn setLogits(net: *Self, logits: *[node_count]f32x16) void {
-            for (&net.sigma, logits) |*sigma, logit| {
-                sigma.* = if (options.softmax_base_2) softmax2(logit / @as(f32x16, @splat(options.gate_temperature))) else softmax_approx(logit / @as(f32x16, @splat(options.gate_temperature)));
-            }
-        }
-
-        /// Randomizes the connections between each layer in a uniform manner.
-        /// Each node of the same layer has equal +- number of children.
-        /// It is possible that a node's parents are equal.
-        pub fn randomize(net: *Self, seed: u64) void {
-            var sfc64 = std.Random.Sfc64.init(seed);
-            const rand = sfc64.random();
-            net.sequentialize();
-            inline for (layer_ranges) |range| {
-                rand.shuffle(NodeIndex, @as(*[2 * range.len]NodeIndex, @ptrCast(net.parents[range.from..range.to()])));
-            }
-        }
-
-        // Sets the connections between each layer to be sequential (wrapping).
-        pub fn sequentialize(net: *Self) void {
-            inline for (layer_ranges, shape[0 .. shape.len - 1], 0..) |range, dim_prev, l| {
-                const offset = if (l == 0) 0 else range.from - dim_prev;
-                _ = offset;
-                var i: usize = 0;
-                for (net.parents[range.from..range.to()]) |*parents| {
-                    const first = i % dim_prev;
-                    const second = (i + 1) % dim_prev;
-                    parents.* = .{ @truncate(first), @truncate(second) };
-                    i += 2;
+            assert(model.parameters_locked);
+            @memset(&model.gradient, 0);
+            const cost_gradient: *[parameter_count / vector_len]ParameterVector = @ptrCast(&model.gradient);
+            const loss_gradient: *[parameter_count / vector_len]ParameterVector = @ptrCast(&model.network.gradient);
+            for (dataset.features, dataset.labels) |feature, label| {
+                const prediction = model.forwardPass(&feature);
+                Loss.gradient(prediction, &label, model.network.lastDeltaBuffer());
+                model.backwardPass();
+                for (cost_gradient, loss_gradient) |*cost_partial, loss_partial| {
+                    cost_partial.* += loss_partial;
                 }
             }
+        }
+
+        /// Trains the model on a given dataset for a specified amount of epochs and batch size.
+        /// Every epoch the model is 'validated' on another given dataset.
+        pub fn train(model: *Self, training: Dataset, validate: Dataset, epoch_count: usize, batch_size: usize) void {
+            assert(batch_size > 0);
+            for (0..epoch_count) |epoch| {
+                var offset: usize = 0;
+                while (training.len() > offset) : (offset += batch_size) {
+                    model.lock();
+                    const subset = training.slice(offset, @min(offset + batch_size, training.len()));
+                    model.differentiate(subset);
+                    model.unlock();
+                    model.optimizer.step(&model.parameters, &model.gradient);
+                }
+                model.lock();
+                if (validate.len() > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });
+                model.unlock();
+           }
         }
     };
 }
 
-// Fixme: Add FloatType as an option.
-pub const ModelOptions = struct {
-    shape: []const usize,
-    InputLayer: ?fn (usize) type = null,
-    OutputLayer: ?fn (usize) type = null,
-    Optimizer: ?fn (usize) type = null,
-    Loss: ?type = null,
-    gate_temperature: f32 = 1,
-};
-
 /// A model encapsulates a differentiable logic gate network into a machine learning context.
 /// It allows you to specify, most importantly, a loss function and optimizer.
-pub fn Model(comptime options: ModelOptions) type {
+pub fn ModelOld(comptime options: ModelOptions) type {
     return struct {
         const Self = @This();
 
