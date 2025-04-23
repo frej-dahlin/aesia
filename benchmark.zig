@@ -1,26 +1,27 @@
 const std = @import("std");
 
 const dlg = @import("dlg.zig");
+const LogicGates = dlg.LogicGates;
 
-var model: dlg.Model(.{
-    //.shape = &[_]usize{ 8, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1 },
-    .shape = &[_]usize{ 28 * 28, 16_000, 16_000, 16_000, 16_000, 16_000 },
-    .OutputLayer = dlg.output_layer.GroupSum(1.0, 10),
-    .Loss = dlg.loss_function.DiscreteCrossEntropy(u8, 10),
-}) = .default;
+// zig fmt: off
+const Network = dlg.Network(.{
+     .Layers = &.{
+          LogicGates(.{ .input_dim = 784, .output_dim = 16_000, .seed = 0 }),
+          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 1 }),
+          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 2 }),
+          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 3 }),
+          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 4 }),
+          LogicGates(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 5 }),
+          LogicGates(.{ .input_dim = 16_000, .output_dim = 10, .seed = 6 }),
+    }
+});
+// zig fmt: on
+
+var network: Network = undefined;
 
 pub fn main() !void {
-    model.network.randomize(0);
-    const count = 1000;
-    const features: [count][28 * 28]f32 = undefined;
-    const labels: [count]u8 = @splat(0);
-
-    var timer = try std.time.Timer.start();
-    model.train(.init(&features, &labels), .empty, 1, 32);
-    const differentiate_ms = timer.read() / 1_000_000;
-
-    std.debug.print("1000 Iterations\n", .{});
-    std.debug.print("-------------------------\n", .{});
-    std.debug.print("differentiate\n", .{});
-    std.debug.print("{d}ms\n", .{differentiate_ms});
+    var parameters: [Network.parameter_count]f32 align(64) = @splat(0);
+    const input: [784]f32 = @splat(0);
+    network.takeParameters(&parameters);
+    for (0..1000) |_| _ = network.eval(&input);
 }

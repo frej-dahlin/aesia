@@ -24,9 +24,9 @@ const Range = struct {
         return range.from + range.len;
     }
 
-    pub fn slice(comptime range: Range, ptr: anytype) @TypeOf(ptr[range.from..range.to()]) {
-        return ptr[range.from..range.to()];
-   }
+    pub fn slice(comptime range: Range, T: type, ptr: anytype) *[range.len]T {
+        return @ptrCast(ptr[range.from..range.to()]);
+    }
 };
 
 pub fn DoubleBuffer(size: usize, alignment: usize) type {
@@ -49,20 +49,20 @@ pub fn DoubleBuffer(size: usize, alignment: usize) type {
 
         pub fn front(buffer: *const Self, T: type) *align(alignment) const T {
             assert(@sizeOf(T) <= size);
-            const from = buffer.half * actual_size;
-            const to = from + actual_size;
-            return @alignCast(@ptrCast(&buffer.data[from..to]));
+            assert(@alignOf(T) <= alignment);
+            const offset = buffer.half * actual_size;
+            return @alignCast(@ptrCast(buffer.data[offset..]));
         }
 
-        pub fn back(buffer: *const Self, T: type) *align(alignment) T {
-            assert(@sizeOf(T) <= size);           
-            const from = (buffer.half +% 1) * actual_size;
-            const to = from + actual_size;
-            return @alignCast(@ptrCast(&buffer.data[from..to]));
+        pub fn back(buffer: *Self, T: type) *align(alignment) T {
+            assert(@sizeOf(T) <= size);
+            assert(@alignOf(T) <= alignment);
+            const offset = (buffer.half +% 1) * actual_size;
+            return @alignCast(@ptrCast(buffer.data[offset..]));
         }
 
         pub fn flip(buffer: *Self) void {
-            buffer.half +%= 1;    
+            buffer.half +%= 1;
         }
     };
 }
@@ -89,6 +89,13 @@ pub fn softmax(logit: f32x16) f32x16 {
     const sigma = @exp(maxNormalize(logit));
     const denom = @reduce(.Add, sigma);
     return sigma / @as(f32x16, @splat(denom));
+}
+
+pub fn softmaxInverse(sigma: f32x16) f32x16 {
+    @setFloatMode(.optimized);
+    const logit = @log(sigma);
+    const denom = @reduce(.Add, logit);
+    return logit / @as(f32x16, @splat(denom));
 }
 
 // Computes (1 + x / 256)^256.
@@ -184,37 +191,43 @@ const NetworkOptions = struct {
 };
 
 pub fn Network(options: NetworkOptions) type {
-    // Fixme: More compile time sanity check the Layers.
-    const Layers = std.meta.Tuple(options.Layers);
-    const parameter_count = blk: {
-        var result: usize = 0;
-        inline for (Layers) |Layer| result += Layer.parameter_count;
-        break :blk result;
-    };
-    const layer_count = Layers.len;
-    const Input = Layers[0].Input;
-    const Output = Layers[layer_count].Output;
-    inline for (Layers[0..layer_count - 1], Layers[1..]) |prev, next| {
+    const Layers = options.Layers;
+    inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
         if (prev.Output != next.Input) @compileError("Layers " ++ @typeName(prev) ++ " and " ++ @typeName(next) ++ " have non matching input & output types.");
     }
-    const align_max = blk: {
-        var max: usize = 0;
-        inline for (Layers, 0..) |Layer, l| {
-            max = @max(max, @alignOf(Layer.Output));
-        }
-        break :blk max;
-    };
-    const size_max = blk: {
-        var max: usize = 0;
-        inline for (Layers, 0..) |Layer, l| {
-            max = @max(max, @sizeOf(Layer.Output));
-        }
-        break :blk max;
-    };
-
     return struct {
-        self: *Self,
-        layers: Layers,
+        const Self = @This();
+
+        // Fixme: More compile time sanity check the Layers.
+        pub const parameter_count = blk: {
+            var result: usize = 0;
+            for (Layers) |Layer| result += Layer.parameter_count;
+            break :blk result;
+        };
+        const Input = Layers[0].Input;
+        const LastLayer = Layers[Layers.len - 1];
+        const Output = LastLayer.Output;
+        const align_max = blk: {
+            var max: usize = 0;
+            for (Layers) |Layer| max = @max(max, @alignOf(Layer.Output));
+            break :blk max;
+        };
+        const size_max = blk: {
+            var max: usize = 0;
+            for (Layers) |Layer| max = @max(max, @sizeOf(Layer.Output));
+            break :blk max;
+        };
+        const parameter_ranges = blk: {
+            var offset: usize = 0;
+            var ranges: [Layers.len]Range = undefined;
+            for (&ranges, Layers) |*range, Layer| {
+                range.* = Range{ .from = offset, .len = Layer.parameter_count };
+                offset = range.to();
+            }
+            break :blk ranges;
+        };
+
+        layers: std.meta.Tuple(Layers),
         gradient: [parameter_count]f32 align(options.parameter_alignment),
         /// A network is evaluated layer by layer, either forwards or backwards.
         /// In either case one only needs to store the result of the previous
@@ -222,11 +235,11 @@ pub fn Network(options: NetworkOptions) type {
         buffer: DoubleBuffer(size_max, align_max),
 
         /// Evaluates the network, layer by layer.
-        pub fn eval(self: *const Self, input: *const Input, buffer: *Buffer) *const Output {
+        pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
-            inline for (self.layers, 0..) |layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(layer.Input);
-                const layer_output = buffer.back(layer.Output);
+            inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
+                const layer_input = if (l == 0) input else buffer.front(Layer.Input);
+                const layer_output = buffer.back(Layer.Output);
                 layer.eval(layer_input, layer_output);
                 buffer.flip();
             }
@@ -247,14 +260,14 @@ pub fn Network(options: NetworkOptions) type {
         ///    taken/given them.
         /// Takes ownership of an array of parameters, preprocessing them, if necessary.
         pub fn takeParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (self.layers, parameter_ranges) |layer, range| {
-                if (layer.parameter_count > 0) layer.takeParameters(range.slice(parameters));
+            inline for (Layers, &self.layers, parameter_ranges) |Layer, *layer, range| {
+                if (Layer.parameter_count > 0) layer.takeParameters(range.slice(f32, parameters));
             }
         }
 
         /// Gives the parameters back, postprocessing them, if necessary.
         pub fn giveParameters(self: *Self) void {
-            inline for (self.layers, parameter_range) |layer, range| {
+            inline for (self.layers) |layer| {
                 if (layer.parameter_count > 0) layer.giveParameters();
             }
         }
@@ -262,8 +275,8 @@ pub fn Network(options: NetworkOptions) type {
         /// Borrows parameters, without preprocessing, called by worker threads after the
         /// main thread has called takeParameters.
         pub fn borrowParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (self.layers, parameter_range) |*layer, range| {
-                if (layer.parameter_count > 0) layer.borrowParameters();
+            inline for (self.layers, parameter_ranges) |*layer, range| {
+                if (layer.parameter_count > 0) layer.borrowParameters(range.slice(parameters));
             }
         }
 
@@ -292,34 +305,139 @@ pub fn Network(options: NetworkOptions) type {
         /// This is called backpropagation.
         /// The caller is responsible for filling the network's buffer with the delta for the last layer.
         /// A pointer to an array of correct length is given by lastDeltaBuffer().
-        pub fn backwardPass(self: *Self, buffer: *Buffer) void {
-            comptime var l: usize = layer_count;
+        pub fn backwardPass(self: *Self) void {
+            const buffer = &self.buffer;
+            comptime var l: usize = Layers.len;
             inline while (l > 0) {
                 l -= 1;
                 const layer = self.layers[l];
                 const input = buffer.front([layer.output_dim]f32);
                 const output = buffer.back([layer.input_dim]f32);
                 const gradient = parameter_ranges[l].slice(self.gradient);
-                layer.backwardPass(gradient, input, output);
+                layer.backwardPass(input, gradient, output);
                 buffer.flip();
             }
         }
 
         /// Returns the correct memory region to put the delta of the last layer before calling backwardPass.
-        pub fn lastDeltaBuffer(self: *Self) *[last_layer.output_dim]f32 {
-            return self.buffer.front([last_layer.output_dim]f32);
+        pub fn lastDeltaBuffer(self: *Self) *[LastLayer.output_dim]f32 {
+            return self.buffer.front([LastLayer.output_dim]f32);
         }
     };
-}      
+}
 
-const NetworkOptions = struct {
-    shape: []const usize,
-    softmax_base_2: bool = false,
-    gate_temperature: f32 = 1.0,
+pub const LogicGatesOptions = struct {
+    input_dim: usize,
+    output_dim: usize,
+    seed: u64,
 };
 
+pub fn LCG32(multiplier: u32, increment: u32, initial_seed: u32) type {
+    return struct {
+        const Self = @This();
+        seed: u32,
+
+        pub const default = Self{ .seed = initial_seed };
+
+        pub fn next(self: *Self) u32 {
+            self.seed *%= multiplier;
+            self.seed +%= increment;
+            return self.seed;
+        }
+
+        pub fn reset(self: *Self) void {
+            self.seed = initial_seed;
+        }
+    };
+}
+
+pub fn LogicGates(options: LogicGatesOptions) type {
+    return struct {
+        const Self = @This();
+        pub const input_dim = options.input_dim;
+        pub const output_dim = options.output_dim;
+        pub const Input = [input_dim]f32;
+        pub const Output = [output_dim]f32;
+        const node_count = output_dim;
+        pub const parameter_count = 16 * node_count;
+
+        /// The preprocessed parameters, computed by softmax(parameters).
+        sigma: ?*[node_count]f32x16,
+        gradient: [node_count]f32x16,
+        diff: [node_count][2]f32,
+        /// Generates the random inputs on-the-fly.
+        lcg: LCG32(1664525, 1013904223, options.seed),
+
+        pub const default = Self{
+            .sigma = null,
+            .gradient = @splat(@splat(0)),
+            .diff = @splat(.{ 0, 0 }),
+            .lcg = .init(options.seed),
+        };
+
+        pub fn eval(self: *Self, input: *const Input, output: *Output) void {
+            self.lcg.reset();
+            for (self.sigma.?, output) |sigma, *activation| {
+                const a = input[self.lcg.next() % input_dim];
+                const b = input[self.lcg.next() % input_dim];
+                activation.* = @reduce(.Add, sigma * Gate.vector(a, b));
+            }
+        }
+
+        pub fn forwardPass(self: *Self, input: *const Input, output: *Output) void {
+            self.lcg.reset();
+            for (self.sigma.?, &self.gradient, &self.diff, output) |sigma, *partial, *diff, *activation| {
+                const a = input[self.lcg.next() % input_dim];
+                const b = input[self.lcg.next() % input_dim];
+                const gate_vector = Gate.vector(a, b);
+                activation.* = @reduce(.Add, sigma * gate_vector);
+                partial.* = sigma * (gate_vector - @as(f32x16, @splat(activation.*)));
+                diff.* = .{
+                    @reduce(.Add, sigma * Gate.diff_a(b)),
+                    @reduce(.Add, sigma * Gate.diff_b(a)),
+                };
+            }
+        }
+
+        /// Todo: Create a function "backward" that does not pass delta backwards, applicable for
+        /// the first layer in a network only.
+        pub fn backwardPass(self: *Self, input: *[output_dim]f32, parameter_gradient: *[parameter_count]f32, output: *[input_dim]f32) void {
+            self.lcg.reset();
+            @memset(output, 0);
+            for (self.gradient, self.diff, @as(*[node_count]f32x16, @ptrCast(parameter_gradient)), input) |partial, diff, *parameter_partial, delta| {
+                const parent_a = self.lcg.next() % input_dim;
+                const parent_b = self.lcg.next() % input_dim;
+                output[parent_a] += delta * diff[0];
+                output[parent_b] += delta * diff[1];
+                parameter_partial.* = @as(f32x16, @splat(delta)) * partial;
+            }
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *[parameter_count]f32) void {
+            // Fixme: Handle differing parameter alignments gracefully.
+            //        It is completely OK to pad inbetween layers if necessary.
+            //        The following will crash the software unless the parameters have align(64).
+            self.sigma = @alignCast(@ptrCast(parameters));
+            for (self.sigma.?) |*sigma| sigma.* = softmax(sigma.*);
+        }
+
+        pub fn giveParameters(self: *Self) void {
+            for (self.sigma) |*sigma| sigma.* = softmaxInverse(sigma);
+            self.sigma = null;
+        }
+
+        pub fn borrowParameters(self: *Self, parameters: *[parameter_count]f32) void {
+            self.sigma = @ptrCast(parameters);
+        }
+
+        pub fn returnParameters(self: *Self) void {
+            self.sigma = null;
+        }
+    };
+}
+
 /// A network of differentiable logic gates.
-pub fn Network(comptime options: NetworkOptions) type {
+pub fn NetworkOld(comptime options: NetworkOptions) type {
     const shape = options.shape;
 
     // Assert validity of the shape array.
@@ -551,44 +669,6 @@ pub const ModelOptions = struct {
     Optimizer: ?fn (usize) type = null,
     Loss: ?type = null,
     gate_temperature: f32 = 1,
-};
-
-const NetworkOptions = struct {
-	Layers: []const type,
-};
-
-pub fn Network(options: NetworkOptions) type {
-	layers: std.meta.Tuple(options.Layers);
-	const layer_count = options.Layers.len;
-	const parameter_count = blk: {
-		var result: usize = 0;
-		inline for (std.meta.Tuple(options.Layers)) |Layer| result += Layer.dim;
-	};
-	
-	buffer: DoubleBuffer(f32, 
-
-	pub fn forwardPass
-	pub fn backwardPass
-	pub fn preprocess(*[parameter_count]
-};
-
-const Layer = struct {
-	const dim_in: usize;
-	const dim_out: usize;
-	const parameter_count: usize;
-
-	const Self = @This();
-	pub fn eval(self: *Self, 
-	
-	pub fn preProcess(self: *Self, *[parameter_count]f32: parameters) void {
-	
-	}
-	
-	pub fn postProcess(self: *Self, *[parameter_count]f32: parameters) void {
-	
-	}
-	
-	pub fn eval(self: *Self,
 };
 
 /// A model encapsulates a differentiable logic gate network into a machine learning context.
