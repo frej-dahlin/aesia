@@ -56,16 +56,26 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-var model: dlg.Model(.{
-    .shape = &(.{784} ++ .{16_000} ** 5),
-    .OutputLayer = dlg.output_layer.GroupSum(1, 10),
-    .Optimizer = dlg.optim.Adam(.{ .learn_rate = 0.02 }),
+const Logic = dlg.Logic;
+const GroupSum = dlg.GroupSum;
+
+// zig fmt: off
+const Model = dlg.Model(&.{ 
+      Logic(.{ .input_dim = 784,    .output_dim = 16_000, .seed = 0 }), 
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 1 }), 
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 2 }), 
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 3 }), 
+      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 4 }), 
+      GroupSum(16_000, 10), 
+}, .{
     .Loss = dlg.loss_function.DiscreteCrossEntropy(u8, 10),
-    .gate_temperature = 1,
-}) = .default;
+    .Optimizer = dlg.optim.Adam(.{.learn_rate = 0.02}),
+}); 
+// zig fmt: on
+var model: Model = undefined;
 
 pub fn main() !void {
-    model.network.randomize(0);
+    model.init();
 
     const allocator = std.heap.page_allocator;
     const images_training = try loadImages(allocator, "data/train-images-idx3-ubyte");
@@ -83,7 +93,7 @@ pub fn main() !void {
     //model.network.setLogits(@ptrCast(&model.parameters));
     //std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
 
-    const training_count = 60_000;
+    const training_count = 10_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();

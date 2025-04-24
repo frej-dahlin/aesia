@@ -2,10 +2,7 @@ const std = @import("std");
 const meta = std.meta;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const EnumArray = std.EnumArray;
-const MultiArrayList = std.MultiArrayList;
 const ArrayList = std.ArrayList;
-const AutoArrayHashMap = std.AutoArrayHashMap;
 
 pub const input_layer = @import("input.zig");
 pub const output_layer = @import("output.zig");
@@ -97,9 +94,7 @@ pub fn softmax(logit: f32x16) f32x16 {
 
 pub fn softmaxInverse(sigma: f32x16) f32x16 {
     @setFloatMode(.optimized);
-    const logit = @log(sigma);
-    const denom = @reduce(.Add, logit);
-    return logit / @as(f32x16, @splat(denom));
+    return @log(sigma);
 }
 
 // Computes (1 + x / 256)^256.
@@ -127,8 +122,8 @@ const Gate = struct {
             a + b - 2 * a * b, // xor
             a + b - a * b, // xnor
             // The following values are simply negation of the above ones in order.
-            // Many authors reverse this order, however this leads to a less efficient
-            // SIMD construction of the vector.
+            // Many authors reverse this order, i.e. true is the last gate,
+            // however this leads to a less efficient SIMD construction of the vector.
             1,
             1 - a * b,
             1 - (a - a * b),
@@ -261,6 +256,15 @@ pub fn Network(Layers: []const type) type {
         /// layer's computation and pass it to the next. A double buffer facilitates this.
         buffer: DoubleBuffer(buffer_size, buffer_alignment),
 
+        pub fn init(self: *Self) void {
+            self.* = Self{
+                .layers = undefined,
+                .gradient = @splat(0),
+                .buffer = .init(0),
+            };
+            inline for (&self.layers) |*layer| layer.init();
+        }
+
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
@@ -344,6 +348,7 @@ pub fn Network(Layers: []const type) type {
         /// A pointer to the correct memory region is given by lastDeltaBuffer().
         pub fn backwardPass(self: *Self) void {
             const buffer = &self.buffer;
+            buffer.flip();
             comptime var l: usize = Layers.len;
             inline while (l > 0) {
                 l -= 1;
@@ -360,6 +365,46 @@ pub fn Network(Layers: []const type) type {
         /// Returns the correct memory region to put the delta of the last layer before calling backwardPass.
         pub fn lastDeltaBuffer(self: *Self) *[LastLayer.output_dim]f32 {
             return self.buffer.back([LastLayer.output_dim]f32);
+        }
+    };
+}
+
+pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
+    return struct {
+        const Self = @This();
+        pub const input_dim = input_dim_;
+        pub const output_dim = output_dim_;
+        pub const Input = [input_dim]f32;
+        pub const Output = [output_dim]f32;
+        pub const parameter_count = 0;
+
+        const quot = input_dim / output_dim;
+        const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(output_dim)));
+
+        field: usize = 1,
+
+        pub fn init(_: *Self) void {}
+
+        pub fn eval(_: *Self, input: *const Input, output: *Output) void {
+            @memset(output, 0);
+            for (output, 0..) |*coord, k| {
+                const from = k * quot;
+                const to = from + quot;
+                for (input[from..to]) |softbit| coord.* += softbit;
+                coord.* *= scale;
+            }
+        }
+
+        pub fn forwardPass(self: *Self, input: *const Input, _: *[0]f32, output: *Output) void {
+            return eval(self, input, output);
+        }
+
+        pub fn backwardPass(_: *Self, input: *const [output_dim]f32, _: *[0]f32, output: *[input_dim]f32) void {
+            for (input, 0..) |child, k| {
+                const from = k * quot;
+                const to = from + quot;
+                for (output[from..to]) |*parent| parent.* = child * scale;
+            }
         }
     };
 }
@@ -386,6 +431,12 @@ pub fn LCG32(multiplier: u32, increment: u32, initial_seed: u32) type {
         pub fn reset(self: *Self) void {
             self.seed = initial_seed;
         }
+
+        pub fn init(seed_: u32) Self {
+            return Self{
+                .seed = seed_,
+            };
+        }
     };
 }
 
@@ -400,18 +451,31 @@ pub fn Logic(options: LogicOptions) type {
         pub const parameter_count = 16 * node_count;
         pub const parameter_alignment = 64;
 
+        const NodeIndex = std.math.IntFittingRange(0, input_dim);
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: ?*[node_count]f32x16,
         diff: [node_count][2]f32,
+        parents: [node_count][2]NodeIndex,
         /// Generates the random inputs on-the-fly.
         lcg: LCG32(1664525, 1013904223, options.seed),
 
-        pub const default = Self{
+        const default = Self{
             .sigma = null,
-            .gradient = @splat(@splat(0)),
             .diff = @splat(.{ 0, 0 }),
             .lcg = .init(options.seed),
+            .parents = undefined,
         };
+
+        pub fn init(self: *Self) void {
+            self.* = .default;
+            @setEvalBranchQuota(16 * node_count);
+            for (&self.parents) |*parents| {
+                parents.* = .{
+                    @truncate(self.lcg.next() % input_dim),
+                    @truncate(self.lcg.next() % input_dim),
+                };
+            }
+        }
 
         pub fn eval(self: *Self, input: *const Input, output: *Output) void {
             @setFloatMode(.optimized);
@@ -458,7 +522,7 @@ pub fn Logic(options: LogicOptions) type {
             }
         }
 
-        /// Todo: Create a function "backward" that does not pass delta backwards, applicable for
+        /// Fixme: Create a function "backward" that does not pass delta backwards, applicable for
         /// the first layer in a network only.
         pub fn backwardPass(self: *Self, input: *const [output_dim]f32, gradient: *[node_count]f32x16, output: *[input_dim]f32) void {
             @setFloatMode(.optimized);
@@ -469,7 +533,7 @@ pub fn Logic(options: LogicOptions) type {
                 const parent_b = self.lcg.next() % input_dim;
                 output[parent_a] += delta * diff[0];
                 output[parent_b] += delta * diff[1];
-                partial.* = @as(f32x16, @splat(delta));
+                partial.* *= @as(f32x16, @splat(delta));
             }
         }
 
@@ -534,7 +598,7 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
         pub const Prediction = NetworkType.Output;
         pub const output_dim = NetworkType.output_dim;
         pub const Optimizer = (if (options.Optimizer) |O| O else optim.Adam(.default))(parameter_count);
-        pub const Loss = (if (options.Loss) |L| L else loss_function.HalvedMeanSquareError)(output_dim);
+        pub const Loss = if (options.Loss) |L| L else loss_function.HalvedMeanSquareError(output_dim);
         pub const Label = Loss.Label;
 
         pub const Dataset = struct {
@@ -571,13 +635,13 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
         optimizer: Optimizer,
         parameters_locked: bool,
 
-        pub fn init() Self {
-            var model = Self{
-                .network = undefined,
-                .parameters = @splat(0),
-                .optimizer = .default,
-            };
-            model.network.initParameters(&model.parameters);
+        pub fn init(self: *Self) void {
+            self.parameters = @splat(0);
+            self.gradient = @splat(0);
+            self.parameters_locked = false;
+            self.optimizer = .default;
+            self.network.init();
+            self.network.initParameters(&self.parameters);
         }
 
         // Not thread safe unless you know the parameter_lock is true.
@@ -658,144 +722,6 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
                 if (validate.len() > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });
                 model.unlock();
            }
-        }
-    };
-}
-
-/// A model encapsulates a differentiable logic gate network into a machine learning context.
-/// It allows you to specify, most importantly, a loss function and optimizer.
-pub fn ModelOld(comptime options: ModelOptions) type {
-    return struct {
-        const Self = @This();
-
-        // Unpack options.
-        const shape = options.shape;
-        const NetworkType = Network(.{
-            .shape = shape,
-            .gate_temperature = options.gate_temperature,
-        });
-        const parameter_count = NetworkType.parameter_count;
-
-        const InputLayer = if (options.InputLayer) |IL| IL(NetworkType.dim_in) else input_layer.Identity(NetworkType.dim_in);
-        const OutputLayer = if (options.OutputLayer) |OL| OL(NetworkType.dim_out) else output_layer.Identity(NetworkType.dim_out);
-        const Optimizer = if (options.Optimizer) |O| O(parameter_count) else optim.Adam(.default)(parameter_count);
-        const Loss = if (options.Loss) |C| C else loss_function.HalvedMeanSquareError(OutputLayer.dim_out);
-
-        const Feature = InputLayer.Feature;
-        const Prediction = OutputLayer.Prediction;
-        const Label = Loss.Label;
-        pub const Dataset = struct {
-            features: []const Feature,
-            labels: []const Label,
-
-            pub const empty = Dataset{ .features = &.{}, .labels = &.{} };
-
-            pub fn len(dataset: Dataset) usize {
-                assert(dataset.features.len == dataset.labels.len);
-                return dataset.features.len;
-            }
-
-            pub fn init(features: []const Feature, labels: []const Label) Dataset {
-                assert(features.len == labels.len);
-                return .{
-                    .features = features,
-                    .labels = labels,
-                };
-            }
-
-            pub fn slice(dataset: Dataset, from: usize, to: usize) Dataset {
-                assert(from <= to);
-                return .{
-                    .features = dataset.features[from..to],
-                    .labels = dataset.labels[from..to],
-                };
-            }
-        };
-        const dim_max = @max(std.mem.max(usize, shape), OutputLayer.dim_out);
-
-        // The parameters of the network, parameters 0 ... network.parameter_count are reserved for the network,
-        // the remaining are for the output layer, if any.
-        parameters: [parameter_count]f32 align(64),
-        // The gradient of the loss function with resepct to every parameter for
-        // a single datapoint, or cost for a full dataset.
-        gradient: [parameter_count]f32 align(64),
-
-        network: Network(.{
-            .shape = shape,
-        }),
-        optimizer: Optimizer,
-        buffer: DoubleBuffer(f32, dim_max),
-
-        pub const default = Self{
-            .parameters = @bitCast(NetworkType.passtrough_biased),
-            .gradient = @splat(0),
-            .network = .default,
-            .optimizer = .default,
-            .buffer = .init(0),
-        };
-
-        /// Returns the mean loss over a dataset.
-        pub fn cost(model: *Self, dataset: Dataset) f32 {
-            assert(dataset.len() > 0);
-            var result: f32 = 0;
-            for (dataset.features, dataset.labels) |feature, label| result += model.loss(&feature, &label);
-            return result / @as(f32, @floatFromInt(dataset.len()));
-        }
-
-        /// Computes the gradient of the sum of the loss function over the entire dataset.
-        pub fn differentiate(model: *Self, dataset: Dataset) void {
-            @memset(&model.gradient, 0);
-            // Fixme: Branch on dataset length for optimal network evaluation during regular SGD.
-            model.network.setLogits(@ptrCast(&model.parameters));
-            for (dataset.features, dataset.labels) |feature, label| {
-                const prediction = model.forwardPass(&feature);
-                model.backwardPass(prediction, &label);
-            }
-        }
-
-        /// Accumulates the gradient backwards.
-        pub fn backwardPass(model: *Self, prediction: *const Prediction, label: *const Label) void {
-            const buffer = &model.buffer;
-            Loss.gradient(prediction, label, buffer);
-            OutputLayer.backwardPass(buffer);
-            model.network.backwardPass(@ptrCast(&model.gradient), buffer);
-        }
-
-        /// Evaluates the model, caching all necessary data to compute the gradient in the backward pass.
-        pub fn forwardPass(model: *Self, feature: *const Feature) *const Prediction {
-            const buffer = &model.buffer;
-            InputLayer.eval(feature, buffer);
-            _ = model.network.forwardPass(buffer);
-            const prediction = OutputLayer.forwardPass(buffer);
-            return prediction;
-        }
-
-        /// The loss of the model given some input and its expected output.
-        pub fn loss(model: *Self, feature: *const Feature, label: *const Label) f32 {
-            return Loss.eval(model.eval(feature), label);
-        }
-
-        /// Evaluates the model.
-        pub fn eval(model: *Self, feature: *const Feature) *const Prediction {
-            const buffer = &model.buffer;
-            InputLayer.eval(feature, buffer);
-            _ = model.network.eval(buffer);
-            return OutputLayer.eval(buffer);
-        }
-
-        /// Trains the model on a given dataset for a specified amount of epochs and batch size.
-        /// Every epoch the model is 'validated' on another given dataset.
-        pub fn train(model: *Self, training: Dataset, validate: Dataset, epoch_count: usize, batch_size: usize) void {
-            assert(batch_size > 0);
-            for (0..epoch_count) |epoch| {
-                var offset: usize = 0;
-                while (training.len() > offset) : (offset += batch_size) {
-                    const subset = training.slice(offset, @min(offset + batch_size, training.len()));
-                    model.differentiate(subset);
-                    model.optimizer.step(&model.parameters, &model.gradient);
-                }
-                if (validate.len() > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });
-            }
         }
     };
 }
