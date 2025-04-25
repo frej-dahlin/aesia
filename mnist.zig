@@ -94,11 +94,11 @@ pub fn main() !void {
     // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
     // model.unlock();
 
-    const training_count = 1_000;
+    const training_count = 60_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), 5, 32);
+    model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), 100, 32);
 
     model.lock();
     var correct_count: usize = 0;
