@@ -13,7 +13,8 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    var buffered = std.io.bufferedReader(file.reader());
+    var decompressor = std.compress.gzip.decompressor(file.reader());
+    var buffered = std.io.bufferedReader(decompressor.reader());
     var reader = buffered.reader();
 
     // Assert magic value.
@@ -41,7 +42,8 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    var buffered = std.io.bufferedReader(file.reader());
+    var decompressor = std.compress.gzip.decompressor(file.reader());
+    var buffered = std.io.bufferedReader(decompressor.reader());
     var reader = buffered.reader();
 
     // Assert magic value.
@@ -76,10 +78,10 @@ pub fn main() !void {
     model.initParameters();
 
     const allocator = std.heap.page_allocator;
-    const images_training = try loadImages(allocator, "data/train-images-idx3-ubyte");
-    const labels_training = try loadLabels(allocator, "data/train-labels-idx1-ubyte");
-    const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte");
-    const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte");
+    const images_training = try loadImages(allocator, "data/train-images-idx3-ubyte.gz");
+    const labels_training = try loadLabels(allocator, "data/train-labels-idx1-ubyte.gz");
+    const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
+    const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
 
     // Load prior model.
     // It must have been initialized with seed = 0.
