@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
-const dlg = @import("dlg.zig");
+const skiffer = @import("skiffer.zig");
 
 const dim = 28;
 const Image = [dim * dim]f32;
@@ -56,22 +56,20 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const Logic = dlg.Logic;
-const GroupSum = dlg.GroupSum;
+const LogicLayer = skiffer.layer.Logic;
+const GroupSum = skiffer.layer.GroupSum;
 
-// zig fmt: off
-const Model = dlg.Model(&.{ 
-      Logic(.{ .input_dim = 784,    .output_dim = 16_000, .seed = 0 }), 
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 1 }), 
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 2 }), 
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 3 }), 
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 4 }), 
-      GroupSum(16_000, 10), 
+const Model = skiffer.Model(&.{
+    LogicLayer(784, 16_000, .{ .seed = 0 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 1 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 2 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 3 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 4 }),
+    GroupSum(16_000, 10),
 }, .{
-    .Loss = dlg.loss_function.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = dlg.optim.Adam(.{.learn_rate = 0.02}),
-}); 
-// zig fmt: on
+    .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
+    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.02 }),
+});
 var model: Model = .default;
 
 pub fn main() !void {
@@ -85,21 +83,21 @@ pub fn main() !void {
 
     // Load prior model.
     // It must have been initialized with seed = 0.
-    std.debug.print("Loading latest mnist.model...", .{});
-    const gigabyte = 1_000_000_000;
-    const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
-    defer allocator.free(parameter_bytes);
-    @memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
-    model.lock();
-    std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
-    model.unlock();
+    // std.debug.print("Loading latest mnist.model...", .{});
+    // const gigabyte = 1_000_000_000;
+    // const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
+    // defer allocator.free(parameter_bytes);
+    // @memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
+    // model.lock();
+    // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    // model.unlock();
 
     const training_count = 1_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), 10, 32);
-    
+    model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), 5, 32);
+
     model.lock();
     var correct_count: usize = 0;
     for (images_validate, labels_validate) |image, label| {

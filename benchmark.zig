@@ -1,19 +1,17 @@
 const std = @import("std");
 
-const dlg = @import("dlg.zig");
-const Logic = dlg.Logic;
-const GroupSum = dlg.GroupSum;
+const skiffer = @import("skiffer.zig");
+const LogicLayer = skiffer.layer.Logic;
+const GroupSum = skiffer.layer.GroupSum;
 
-// zig fmt: off
-const Model = dlg.Model(&.{
-      Logic(.{ .input_dim = 784,    .output_dim = 16_000, .seed = 0 }),
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 1 }),
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 2 }),
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 3 }),
-      Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 4 }),
-      GroupSum(16_000, 10),
-}, .{.Optimizer = null, .Loss = dlg.loss_function.DiscreteCrossEntropy(u8, 10)});
-// zig fmt: on
+const Model = skiffer.Model(&.{
+    LogicLayer(784, 16_000, .{ .seed = 0 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 1 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 2 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 3 }),
+    LogicLayer(16_000, 16_000, .{ .seed = 4 }),
+    GroupSum(16_000, 10),
+}, .{ .Optimizer = null, .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10) });
 
 var model: Model = .default;
 
