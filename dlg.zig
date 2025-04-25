@@ -11,6 +11,7 @@ pub const optim = @import("optim.zig");
 
 pub const f32x16 = @Vector(16, f32);
 pub const f32x8 = @Vector(8, f32);
+pub const f32x2 = @Vector(2, f32);
 
 /// Ranges are stored in this manner to make the illegal ranges (where to < from) unrepresentable.
 const Range = struct {
@@ -26,6 +27,14 @@ const Range = struct {
     }
 };
 
+/// A read-write double buffer consists of two equally sized memory regions: a front and back.
+/// The intention of this data structure is to statically allocate transient memory regions for functions
+/// to be passed input in the front half and pass output to the back half.
+/// One acquires a pointer to each respective regions with the front(T) and back(t) commands,
+/// where T is the type to case the pointer to the memory region to. The front is read only,
+/// i.e. front(T) returns has return type "*const T" and back(T) returns a pointer to variable memory.
+/// After the back of buffer is filled one calls flip() to switch the two memory regions. Note that
+/// no memory is moved and one can safely read from the front until the next flip() call.
 pub fn DoubleBuffer(size: usize, alignment: usize) type {
     return struct {
         const Self = @This();
@@ -41,12 +50,7 @@ pub fn DoubleBuffer(size: usize, alignment: usize) type {
         /// Encodes which half currently is the front, 0: first half, 1: second half.
         half: u1,
 
-        pub fn init(element: u8) Self {
-            return Self{
-                .data = @splat(element),
-                .half = 0,
-            };
-        }
+        pub const default = Self{ .data = @splat(0), .half = 0 };
 
         pub fn front(buffer: *const Self, T: type) *align(alignment) const T {
             assert(@sizeOf(T) <= size);
@@ -97,6 +101,11 @@ pub fn softmaxInverse(sigma: f32x16) f32x16 {
     return @log(sigma);
 }
 
+pub fn softmaxInverse2(sigma: f32x16) f32x16 {
+    @setFloatMode(.optimized);
+    return @log2(sigma);
+}
+
 // Computes (1 + x / 256)^256.
 pub fn softmax_approx(logit: f32x16) f32x16 {
     @setFloatMode(.optimized);
@@ -112,6 +121,7 @@ const Gate = struct {
     /// Only intended for reference. The current implementation
     /// inlines this construction in forwardPass.
     pub fn vector(a: f32, b: f32) f32x16 {
+        @setFloatMode(.optimized);
         return .{
             0, // false
             a * b, // and
@@ -250,20 +260,21 @@ pub fn Network(Layers: []const type) type {
         };
 
         layers: std.meta.Tuple(Layers),
-        gradient: [parameter_count]f32 align(parameter_alignment),
         /// A network is evaluated layer by layer, either forwards or backwards.
         /// In either case one only needs to store the result of the previous
         /// layer's computation and pass it to the next. A double buffer facilitates this.
         buffer: DoubleBuffer(buffer_size, buffer_alignment),
 
-        pub fn init(self: *Self) void {
-            self.* = Self{
-                .layers = undefined,
-                .gradient = @splat(0),
-                .buffer = .init(0),
-            };
-            inline for (&self.layers) |*layer| layer.init();
-        }
+        pub const default = Self{
+            .layers = blk: {
+                var result: std.meta.Tuple(Layers) = undefined;
+                for (Layers, &result) |Layer, *entry| {
+                    if (@sizeOf(Layer) > 0) entry.* = Layer.default;
+                }
+                break :blk result;
+            },
+            .buffer = .default,
+        };
 
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
@@ -313,40 +324,39 @@ pub fn Network(Layers: []const type) type {
             }
         }
 
-        /// Returns parameters, without postprocessing, called by worker threads after the
-        /// main thread has called giveParameters.
+        /// Returns parameters, without postprocessing, called by worker threads before the
+        /// main thread calls giveParameters.
         pub fn returnParameters(self: *Self) void {
             inline for (self.layers) |*layer| {
                 if (layer.parameter_count > 0) layer.returnParameters();
             }
         }
 
-        pub fn initParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (Layers, self.layers, parameter_ranges) |Layer, layer, range| {
-                const slice = range.slice(f32, parameters);
-                if (Layer.parameter_count > 0) layer.initParameters(@alignCast(@ptrCast(slice)));
+        pub fn initParameters(_: *Self, parameters: *[parameter_count]f32) void {
+            inline for (Layers, parameter_ranges) |Layer, range| {
+                const slice = parameters[range.from..range.to()];
+                if (range.len > 0) @memcpy(slice, &Layer.default_parameters);
             }
         }
 
         /// Evaluates the network and caches relevant data it needs for the backward pass.
         pub fn forwardPass(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
-            inline for (Layers, &self.layers, parameter_ranges, 0..) |Layer, *layer, range, l| {
+            inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
                 const layer_input = if (l == 0) input else buffer.front(Layer.Input);
-                const gradient = range.slice(f32, &self.gradient);
                 const layer_output = buffer.back(Layer.Output);
-                layer.forwardPass(layer_input, @alignCast(@ptrCast(gradient)), layer_output);
+                layer.forwardPass(layer_input, layer_output);
                 buffer.flip();
             }
             return buffer.front(Output);
         }
 
-        /// Accumulates the network's gradient backwards, layer by layer. Every layer passes its delta,
+        /// Accumulates the given gradient backwards, layer by layer. Every layer passes its delta,
         /// the derivative of the loss function with respect to its activations, backwards through the buffer.
         /// This is called backpropagation.
         /// The caller is responsible for filling the network's buffer with the delta for the last layer.
         /// A pointer to the correct memory region is given by lastDeltaBuffer().
-        pub fn backwardPass(self: *Self) void {
+        pub fn backwardPass(self: *Self, gradient: *[parameter_count]f32) void {
             const buffer = &self.buffer;
             buffer.flip();
             comptime var l: usize = Layers.len;
@@ -356,8 +366,9 @@ pub fn Network(Layers: []const type) type {
                 const layer = &self.layers[l];
                 const input = buffer.front([Layer.output_dim]f32);
                 const output = buffer.back([Layer.input_dim]f32);
-                const gradient = parameter_ranges[l].slice(f32, &self.gradient);
-                layer.backwardPass(input, @alignCast(@ptrCast(gradient)), output);
+                const range = parameter_ranges[l];
+                const gradient_slice = gradient[range.from..range.to()];
+                layer.backwardPass(input, @alignCast(@ptrCast(gradient_slice)), output);
                 buffer.flip();
             }
         }
@@ -383,7 +394,9 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
 
         field: usize = 1,
 
-        pub fn init(_: *Self) void {}
+        pub const default = Self{
+            .field = 1,
+        };
 
         pub fn eval(_: *Self, input: *const Input, output: *Output) void {
             @memset(output, 0);
@@ -395,7 +408,7 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
             }
         }
 
-        pub fn forwardPass(self: *Self, input: *const Input, _: *[0]f32, output: *Output) void {
+        pub fn forwardPass(self: *Self, input: *const Input, output: *Output) void {
             return eval(self, input, output);
         }
 
@@ -451,33 +464,24 @@ pub fn Logic(options: LogicOptions) type {
         pub const parameter_count = 16 * node_count;
         pub const parameter_alignment = 64;
 
-        const NodeIndex = std.math.IntFittingRange(0, input_dim);
+        gradient: [node_count]f32x16 align(64),
+        diff: [node_count][2]f32 align(64),
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: ?*[node_count]f32x16,
-        diff: [node_count][2]f32,
-        parents: [node_count][2]NodeIndex,
         /// Generates the random inputs on-the-fly.
         lcg: LCG32(1664525, 1013904223, options.seed),
 
-        const default = Self{
-            .sigma = null,
+        pub const default = Self{
+            .gradient = @splat(@splat(0)),
             .diff = @splat(.{ 0, 0 }),
             .lcg = .init(options.seed),
-            .parents = undefined,
+            .sigma = null,
         };
 
-        pub fn init(self: *Self) void {
-            self.* = .default;
-            @setEvalBranchQuota(16 * node_count);
-            for (&self.parents) |*parents| {
-                parents.* = .{
-                    @truncate(self.lcg.next() % input_dim),
-                    @truncate(self.lcg.next() % input_dim),
-                };
-            }
-        }
+        pub const default_parameters: [parameter_count]f32 =
+            @bitCast(@as([node_count]f32x16, @splat(.{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10)));
 
-        pub fn eval(self: *Self, input: *const Input, output: *Output) void {
+        pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
             assert(self.sigma != null);
             self.lcg.reset();
@@ -488,11 +492,13 @@ pub fn Logic(options: LogicOptions) type {
             }
         }
 
-        pub fn forwardPass(self: *Self, input: *const Input, gradient: *[node_count]f32x16, output: *Output) void {
+        pub fn forwardPass(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
             assert(self.sigma != null);
             self.lcg.reset();
-            for (self.sigma.?, gradient, &self.diff, output) |sigma, *partial, *diff, *activation| {
+            // For some reason it is faster to to a simple loop rather than a multi item one.
+            // I detected needless memcpy calls with callgrind.
+            for (0..node_count) |j| {
                 const a = input[self.lcg.next() % input_dim];
                 const b = input[self.lcg.next() % input_dim];
 
@@ -507,33 +513,35 @@ pub fn Logic(options: LogicOptions) type {
                 // explicitly construct the first half.
                 const diff_a_half = a_coef + mix_coef * @as(f32x8, @splat(b));
                 const diff_b_half = b_coef + mix_coef * @as(f32x8, @splat(a));
-                diff.* = .{
-                    @reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
-                    @reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
-                };
                 const gate_half =
                     a_coef * @as(f32x8, @splat(a)) +
                     b_coef * @as(f32x8, @splat(b)) +
                     mix_coef * @as(f32x8, @splat(a * b));
                 const gate_vector = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
 
-                activation.* = @reduce(.Add, sigma * gate_vector);
-                partial.* = sigma * (gate_vector - @as(f32x16, @splat(activation.*)));
+                const sigma = self.sigma.?[j];
+                self.diff[j] = .{
+                    @reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
+                    @reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
+                };
+                output[j] = @reduce(.Add, sigma * gate_vector);
+                self.gradient[j] = sigma * (gate_vector - @as(f32x16, @splat(output[j])));
             }
         }
 
         /// Fixme: Create a function "backward" that does not pass delta backwards, applicable for
         /// the first layer in a network only.
-        pub fn backwardPass(self: *Self, input: *const [output_dim]f32, gradient: *[node_count]f32x16, output: *[input_dim]f32) void {
+        pub fn backwardPass(noalias self: *Self, noalias input: *const [output_dim]f32, noalias cost_gradient: *[node_count]f32x16, noalias output: *[input_dim]f32) void {
             @setFloatMode(.optimized);
             self.lcg.reset();
             @memset(output, 0);
-            for (self.diff, gradient, input) |diff, *partial, delta| {
+            for (0..node_count) |j| {
                 const parent_a = self.lcg.next() % input_dim;
                 const parent_b = self.lcg.next() % input_dim;
-                output[parent_a] += delta * diff[0];
-                output[parent_b] += delta * diff[1];
-                partial.* *= @as(f32x16, @splat(delta));
+                cost_gradient[j] += self.gradient[j] * @as(f32x16, @splat(input[j]));
+                const out = @as(f32x2, self.diff[j]) * @as(f32x2, @splat(input[j]));
+                output[parent_a] += out[0];
+                output[parent_b] += out[1];
             }
         }
 
@@ -562,7 +570,7 @@ pub fn Logic(options: LogicOptions) type {
 
         pub fn initParameters(_: *const Self, parameters: *[node_count]f32x16) void {
             // Initialize to be biased toward the two passthrough gates.
-            parameters.* = @splat(.{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10);
+            @memset(parameters, [_]f32{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10);
         }
     };
 }
@@ -579,19 +587,19 @@ pub const ModelOptions = struct {
 
 // zig fmt: off
 pub fn Model(Layers: []const type, options: ModelOptions) type {
-    const NetworkType = Network(Layers);
-    const parameter_count = NetworkType.parameter_count;
-    const vector_len = std.simd.suggestVectorLength(f32) orelse 1;
-    const ParameterVector = @Vector(vector_len, f32);
-    comptime {
-        assert(parameter_count % vector_len == 0);
-    }
-    const parameter_alignment = @max(
-        NetworkType.parameter_alignment,
-        @alignOf(@Vector(vector_len, f32))
-    );
     return struct {
         const Self = @This();
+
+        const NetworkType = Network(Layers);
+        pub const parameter_count = NetworkType.parameter_count;
+        const vector_len = std.simd.suggestVectorLength(f32) orelse 1;
+        comptime {
+            assert(parameter_count % vector_len == 0);
+        }
+        const parameter_alignment = @max(
+            NetworkType.parameter_alignment,
+            @alignOf(@Vector(vector_len, f32))
+        );
 
         pub const Feature = NetworkType.Input;
         pub const input_dim = NetworkType.input_dim;
@@ -633,57 +641,57 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
         parameters: [parameter_count]f32 align(parameter_alignment),        
         gradient: [parameter_count]f32 align(parameter_alignment),
         optimizer: Optimizer,
-        parameters_locked: bool,
+        locked: bool,
 
-        pub fn init(self: *Self) void {
-            self.parameters = @splat(0);
-            self.gradient = @splat(0);
-            self.parameters_locked = false;
-            self.optimizer = .default;
-            self.network.init();
+        pub const default = Self{
+            .network = .default,
+            .parameters = @splat(0),
+            .gradient = @splat(0),
+            .optimizer = .default,
+            .locked = false,
+        };
+
+        pub fn initParameters(self: *Self) void {
             self.network.initParameters(&self.parameters);
         }
 
         // Not thread safe unless you know the parameter_lock is true.
         pub fn eval(model: *Self, input: *const Feature) *const Prediction {
-            if (!model.parameters_locked) {
-                model.network.takeParameters(&model.parameters);
-                model.parameters_locked = true;
-            }
+            assert(model.locked);
             return model.network.eval(input);
         }
 
         pub fn forwardPass(model: *Self, feature: *const Feature) *const Prediction {
-            assert(model.parameters_locked);
+            assert(model.locked);
             return model.network.forwardPass(feature);
         }
 
         pub fn backwardPass(model: *Self) void {
-            assert(model.parameters_locked);
-            return model.network.backwardPass();
+            assert(model.locked);
+            return model.network.backwardPass(&model.gradient);
         }
 
         pub fn lock(model: *Self) void {
-            assert(!model.parameters_locked);
+            assert(!model.locked);
             model.network.takeParameters(&model.parameters);
-            model.parameters_locked = true;
+            model.locked = true;
         }
 
         pub fn unlock(model: *Self) void {
-            assert(model.parameters_locked);
+            assert(model.locked);
             model.network.giveParameters();
-            model.parameters_locked = false;
+            model.locked = false;
         }
 
         pub fn loss(model: *Self, feature: *const Feature, label: *const Label) f32 {
-            assert(model.parameters_locked);
+            assert(model.locked);
             return Loss.eval(model.eval(feature), label);
         }
 
         /// Returns the mean loss over a dataset.
         pub fn cost(model: *Self, dataset: Dataset) f32 {
             assert(dataset.len() > 0);
-            assert(model.parameters_locked);
+            assert(model.locked);
             var result: f32 = 0;
             for (dataset.features, dataset.labels) |feature, label| result += model.loss(&feature, &label);
             return result / @as(f32, @floatFromInt(dataset.len()));
@@ -691,23 +699,19 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
 
         pub fn differentiate(model: *Self, dataset: Dataset) void {
             @setFloatMode(.optimized);
-            assert(model.parameters_locked);
+            assert(model.locked);
             @memset(&model.gradient, 0);
-            const cost_gradient: *[parameter_count / vector_len]ParameterVector = @ptrCast(&model.gradient);
-            const loss_gradient: *[parameter_count / vector_len]ParameterVector = @ptrCast(&model.network.gradient);
             for (dataset.features, dataset.labels) |feature, label| {
                 const prediction = model.forwardPass(&feature);
                 Loss.gradient(prediction, &label, model.network.lastDeltaBuffer());
                 model.backwardPass();
-                for (cost_gradient, loss_gradient) |*cost_partial, loss_partial| {
-                    cost_partial.* += loss_partial;
-                }
             }
         }
 
         /// Trains the model on a given dataset for a specified amount of epochs and batch size.
         /// Every epoch the model is 'validated' on another given dataset.
         pub fn train(model: *Self, training: Dataset, validate: Dataset, epoch_count: usize, batch_size: usize) void {
+            assert(!model.locked);
             assert(batch_size > 0);
             for (0..epoch_count) |epoch| {
                 var offset: usize = 0;
@@ -716,7 +720,7 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
                     const subset = training.slice(offset, @min(offset + batch_size, training.len()));
                     model.differentiate(subset);
                     model.unlock();
-                    model.optimizer.step(&model.parameters, &model.gradient);
+                    model.optimizer.step(@ptrCast(&model.parameters), @ptrCast(&model.gradient));
                 }
                 model.lock();
                 if (validate.len() > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });

@@ -72,10 +72,10 @@ const Model = dlg.Model(&.{
     .Optimizer = dlg.optim.Adam(.{.learn_rate = 0.02}),
 }); 
 // zig fmt: on
-var model: Model = undefined;
+var model: Model = .default;
 
 pub fn main() !void {
-    model.init();
+    model.initParameters();
 
     const allocator = std.heap.page_allocator;
     const images_training = try loadImages(allocator, "data/train-images-idx3-ubyte");
@@ -85,19 +85,22 @@ pub fn main() !void {
 
     // Load prior model.
     // It must have been initialized with seed = 0.
-    //std.debug.print("Loading latest mnist.model...", .{});
-    //const gigabyte = 1_000_000_000;
-    //const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
-    //defer allocator.free(parameter_bytes);
-    //@memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
-    //model.network.setLogits(@ptrCast(&model.parameters));
-    //std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    std.debug.print("Loading latest mnist.model...", .{});
+    const gigabyte = 1_000_000_000;
+    const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
+    defer allocator.free(parameter_bytes);
+    @memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
+    model.lock();
+    std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    model.unlock();
 
-    const training_count = 10_000;
+    const training_count = 1_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), 5, 32);
+    model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), 10, 32);
+    
+    model.lock();
     var correct_count: usize = 0;
     for (images_validate, labels_validate) |image, label| {
         var max_index: usize = 0;
@@ -110,6 +113,7 @@ pub fn main() !void {
         }
         if (max_index == label) correct_count += 1;
     }
+    model.unlock();
     std.debug.print("Correctly classified {d} / {d} ~ {d}%\n", .{ correct_count, images_validate.len, 100 * @as(f32, @floatFromInt(correct_count)) / @as(f32, @floatFromInt(images_validate.len)) });
     std.debug.print("Training took: {d}min\n", .{timer.read() / std.time.ns_per_min});
 

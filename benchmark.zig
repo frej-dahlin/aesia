@@ -12,19 +12,19 @@ const Model = dlg.Model(&.{
       Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 3 }),
       Logic(.{ .input_dim = 16_000, .output_dim = 16_000, .seed = 4 }),
       GroupSum(16_000, 10),
-}, .{.Loss = dlg.loss_function.DiscreteCrossEntropy(u8, 10), .Optimizer = null});
+}, .{.Optimizer = null, .Loss = dlg.loss_function.DiscreteCrossEntropy(u8, 10)});
 // zig fmt: on
 
-var model: Model = undefined;
+var model: Model = .default;
 
 const count = 1000;
 
 pub fn main() !void {
-    model.init();
+    model.initParameters();
     _ = count;
-    const features: [count][784]f32 = undefined;
-    const labels: [count]u8 = undefined;
+    const features: [count][784]f32 = @splat(@splat(0));
+    const labels: [count]u8 = @splat(0);
     var timer = try std.time.Timer.start();
     model.train(.init(&features, &labels), .empty, 1, 32);
-    std.debug.print("{d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    std.debug.print("{d}ms\n", .{timer.read() / 1_000_000});
 }
