@@ -101,12 +101,12 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             // The gradient of eval with respect to each respective probabilities logits.
             pub fn gradient(sigma: CDLG, a: f32, b: f32) f32x4 {
                 const mix = a * b;
-                const value = sigma.eval(a, b);
+                const half: f32 = sigma.a * (a - mix) + sigma.b * (b - mix) + sigma.mix * mix;
                 return .{
-                    -sigma.a * (1 - sigma.a) * (a - mix),
-                    -sigma.b * (1 - sigma.b) * (b - mix),
-                    -sigma.mix * (1 - sigma.mix) * mix,
-                    -sigma.neg * (1 - sigma.neg) * (1 - 2 * value),
+                    (1 - 2 * sigma.neg) * sigma.a * (1 - sigma.a) * (a - mix),
+                    (1 - 2 * sigma.neg) * sigma.b * (1 - sigma.b) * (b - mix),
+                    (1 - 2 * sigma.neg) * sigma.mix * (1 - sigma.mix) * mix,
+                    sigma.neg * (1 - sigma.neg) * (1 - 2 * half),
                 };
             }
         };
@@ -208,7 +208,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         };
 
         fn logistic(x: f32) f32 {
-            return 1 / (1 + @exp(x));
+            return 1 / (1 + @exp(-x));
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
