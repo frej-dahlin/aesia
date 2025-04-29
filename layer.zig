@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 
 const f32x16 = @Vector(16, f32);
 const f32x8 = @Vector(8, f32);
+const f32x4 = @Vector(4, f32);
 const f32x2 = @Vector(2, f32);
 
 /// A layer is a type interface, it needs to declare:
@@ -67,15 +68,53 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         pub const Input = [input_dim]f32;
         pub const Output = [output_dim]f32;
         const node_count = output_dim;
-        // There are 16 possible logic gates, each one is assigned a probability logit.
-        pub const parameter_count = 16 * node_count;
+        // There are 16 possible logic gates, we use a novel compressed differentiable representation.
+        pub const parameter_count = 4 * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
         pub const parameter_alignment = 64;
 
-        gradient: [node_count]f32x16 align(64),
+        const CDLG = struct {
+            a: f32,
+            b: f32,
+            mix: f32,
+            neg: f32,
+
+            // Evaluates the compressed differentiable logic gate.
+            pub fn eval(sigma: CDLG, a: f32, b: f32) f32 {
+                const mix = a * b;
+                const half: f32 = sigma.a * (a - mix) + sigma.b * (b - mix) + sigma.mix * mix;
+                return (1 - sigma.neg) * half + sigma.neg * (1 - half);
+            }
+
+            // The derivative of eval with respect to the first variable.
+            pub fn aDiff(sigma: CDLG, b: f32) f32 {
+                const half = sigma.a * (1 - b) + sigma.b * (-b) + sigma.mix * b;
+                return (1 - 2 * sigma.neg) * half;
+            }
+
+            // The derivative of eval with respect to the second variable.
+            pub fn bDiff(sigma: CDLG, a: f32) f32 {
+                const half = sigma.a * (-a) + sigma.b * (1 - a) + sigma.mix * a;
+                return (1 - 2 * sigma.neg) * half;
+            }
+
+            // The gradient of eval with respect to each respective probabilities logits.
+            pub fn gradient(sigma: CDLG, a: f32, b: f32) f32x4 {
+                const mix = a * b;
+                const value = sigma.eval(a, b);
+                return .{
+                    -sigma.a * (1 - sigma.a) * (a - mix),
+                    -sigma.b * (1 - sigma.b) * (b - mix),
+                    -sigma.mix * (1 - sigma.mix) * mix,
+                    -sigma.neg * (1 - sigma.neg) * (1 - 2 * value),
+                };
+            }
+        };
+
+        gradient: [node_count]f32x4 align(64),
         diff: [node_count][2]f32 align(64),
         /// The preprocessed parameters, computed by softmax(parameters).
-        sigma: ?*[node_count]f32x16 align(64),
+        sigma: [node_count]CDLG align(64),
         /// Generates the random inputs on-the-fly.
         lcg: LCG32(1664525, 1013904223, options.seed),
 
@@ -83,11 +122,11 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             .gradient = @splat(@splat(0)),
             .diff = @splat(.{ 0, 0 }),
             .lcg = .init(options.seed),
-            .sigma = null,
+            .sigma = undefined,
         };
 
         pub const default_parameters: [parameter_count]f32 =
-            @bitCast(@as([node_count]f32x16, @splat(.{ 0, 0, 0, 8, 0, 8 } ++ .{0} ** 10)));
+            @bitCast(@as([node_count]f32x4, @splat(.{ 0, 0, 1, 1 })));
 
         /// Gate namespace for SIMD vector of relaxed logic gates.
         const gate = struct {
@@ -168,59 +207,22 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             }
         };
 
-        /// Logits are normalized such that max(logits) == 0.
-        /// When the logits grow to big exp^logit will explode.
-        fn maxNormalize(v: f32x16) f32x16 {
-            return v - @as(f32x16, @splat(@reduce(.Max, v)));
-        }
-
-        fn softmax2(logit: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            const sigma = @exp2(maxNormalize(logit));
-            const denom = @reduce(.Add, sigma);
-            return sigma / @as(f32x16, @splat(denom));
-        }
-
-        fn softmax(logit: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            const sigma = @exp(maxNormalize(logit));
-            const denom = @reduce(.Add, sigma);
-            return sigma / @as(f32x16, @splat(denom));
-        }
-
-        fn softmaxInverse(sigma: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            return @log(sigma);
-        }
-
-        fn softmax2Inverse(sigma: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            return @log2(sigma);
-        }
-
-        // Computes (1 + x / 256)^256.
-        fn softmaxApprox(logit: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            const scale = @as(f32x16, @splat(@as(f32, 1.0 / 256.0)));
-            var ret = @as(f32x16, @splat(1)) + maxNormalize(logit) * scale;
-            inline for (0..8) |_| ret *= ret;
-            return ret / @as(f32x16, @splat(@reduce(.Add, ret)));
+        fn logistic(x: f32) f32 {
+            return 1 / (1 + @exp(x));
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
-            assert(self.sigma != null);
             self.lcg.reset();
-            for (self.sigma.?, output) |sigma, *activation| {
+            for (self.sigma, output) |sigma, *activation| {
                 const a = input[self.lcg.next() % input_dim];
                 const b = input[self.lcg.next() % input_dim];
-                activation.* = @reduce(.Add, sigma * gate.vector(a, b));
+                activation.* = sigma.eval(a, b);
             }
         }
 
         pub fn forwardPass(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
-            assert(self.sigma != null);
             self.lcg.reset();
             // For some reason it is faster to to a simple loop rather than a multi item one.
             // I found needless memcpy calls with callgrind.
@@ -228,69 +230,52 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                 const a = input[self.lcg.next() % input_dim];
                 const b = input[self.lcg.next() % input_dim];
 
-                // Inline construction of gateVector(a, b), diff_a(b), and Gate.diff_b(a).
-                // We do it in this way since all three depend on mix_coef, and two out of three
-                // depend on a_coef/b_coef.
-                const a_coef: f32x8 = .{ 0, 0, 1, 1, 0, 0, 1, 1 };
-                const b_coef: f32x8 = .{ 0, 0, 0, 0, 1, 1, 1, 1 };
-                const mix_coef: f32x8 = .{ 0, 1, -1, 0, -1, 0, -2, -1 };
-
-                // All three desired vectors have halfway symmetry so we only
-                // explicitly construct the first half.
-                const diff_a_half = a_coef + mix_coef * @as(f32x8, @splat(b));
-                const diff_b_half = b_coef + mix_coef * @as(f32x8, @splat(a));
-                const gate_half =
-                    a_coef * @as(f32x8, @splat(a)) +
-                    b_coef * @as(f32x8, @splat(b)) +
-                    mix_coef * @as(f32x8, @splat(a * b));
-                const gate_vector = std.simd.join(gate_half, @as(f32x8, @splat(1)) - gate_half);
-
-                const sigma = self.sigma.?[j];
+                const sigma = self.sigma[j];
+                output[j] = sigma.eval(a, b);
                 self.diff[j] = .{
-                    @reduce(.Add, sigma * std.simd.join(diff_a_half, -diff_a_half)),
-                    @reduce(.Add, sigma * std.simd.join(diff_b_half, -diff_b_half)),
+                    sigma.aDiff(b),
+                    sigma.bDiff(a),
                 };
-                output[j] = @reduce(.Add, sigma * gate_vector);
-                self.gradient[j] = sigma * (gate_vector - @as(f32x16, @splat(output[j])));
+                self.gradient[j] = sigma.gradient(a, b);
             }
         }
 
         /// Fixme: Create a function "backward" that does not pass delta backwards, applicable for
         /// the first layer in a network only.
-        pub fn backwardPass(noalias self: *Self, noalias input: *const [output_dim]f32, noalias cost_gradient: *[node_count]f32x16, noalias output: *[input_dim]f32) void {
+        pub fn backwardPass(noalias self: *Self, noalias input: *const [output_dim]f32, noalias cost_gradient: *[node_count]f32x4, noalias output: *[input_dim]f32) void {
             @setFloatMode(.optimized);
             self.lcg.reset();
             @memset(output, 0);
             for (0..node_count) |j| {
                 const parent_a = self.lcg.next() % input_dim;
                 const parent_b = self.lcg.next() % input_dim;
-                cost_gradient[j] += self.gradient[j] * @as(f32x16, @splat(input[j]));
+                cost_gradient[j] += self.gradient[j] * @as(f32x4, @splat(input[j]));
                 output[parent_a] += self.diff[j][0] * input[j];
                 output[parent_b] += self.diff[j][1] * input[j];
             }
         }
 
-        pub fn takeParameters(self: *Self, parameters: *[node_count]f32x16) void {
+        pub fn takeParameters(self: *Self, parameters: *[node_count]f32x4) void {
             @setFloatMode(.optimized);
-            assert(self.sigma == null);
-            self.sigma = parameters;
-            for (self.sigma.?, parameters) |*sigma, logit| sigma.* = softmax2(logit);
+            for (&self.sigma, parameters) |*sigma, logit| {
+                sigma.a = logistic(logit[0]);
+                sigma.b = logistic(logit[1]);
+                sigma.mix = logistic(logit[2]);
+                sigma.neg = logistic(logit[3]);
+            }
         }
 
         pub fn giveParameters(self: *Self) void {
-            assert(self.sigma != null);
-            for (self.sigma.?) |*sigma| sigma.* = softmax2Inverse(sigma.*);
-            self.sigma = null;
+            _ = self;
         }
 
         pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
-            assert(self.sigma == null);
-            self.sigma = parameters;
+            _ = self;
+            _ = parameters;
         }
 
         pub fn returnParameters(self: *Self) void {
-            assert(self.sigma != null);
-            self.sigma = null;
+            _ = self;
         }
     };
 }
