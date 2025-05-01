@@ -115,18 +115,20 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             }
         };
 
-        gradient: [node_count]f32x4 align(64),
         diff: [node_count][2]f32 align(64),
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: [node_count]CDLG align(64),
+        input_a: [node_count]f32,
+        input_b: [node_count]f32,
         /// Generates the random inputs on-the-fly.
         lcg: LCG32(1664525, 1013904223, options.seed),
 
         pub const default = Self{
-            .gradient = @splat(@splat(0)),
             .diff = @splat(.{ 0, 0 }),
             .lcg = .init(options.seed),
             .sigma = undefined,
+            .input_a = @splat(0),
+            .input_b = @splat(0),
         };
 
         pub const default_parameters: [parameter_count]f32 =
@@ -234,14 +236,14 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             for (0..node_count) |j| {
                 const a = input[self.lcg.next() % input_dim];
                 const b = input[self.lcg.next() % input_dim];
-
+                self.input_a[j] = a;
+                self.input_b[j] = b;
+            }
+            for (0..node_count) |j| {
+                const a = self.input_a[j];
+                const b = self.input_b[j];
                 const sigma = self.sigma[j];
                 output[j] = sigma.eval(a, b);
-                self.diff[j] = .{
-                    sigma.aDiff(b),
-                    sigma.bDiff(a),
-                };
-                self.gradient[j] = sigma.gradient(a, b);
             }
         }
 
@@ -254,9 +256,12 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             for (0..node_count) |j| {
                 const parent_a = self.lcg.next() % input_dim;
                 const parent_b = self.lcg.next() % input_dim;
-                cost_gradient[j] += self.gradient[j] * @as(f32x4, @splat(input[j]));
-                output[parent_a] += self.diff[j][0] * input[j];
-                output[parent_b] += self.diff[j][1] * input[j];
+                const a = self.input_a[j];
+                const b = self.input_b[j];
+                const sigma = self.sigma[j];
+                cost_gradient[j] += sigma.gradient(a, b) * @as(f32x4, @splat(input[j]));
+                output[parent_a] += sigma.aDiff(b) * input[j];
+                output[parent_b] += sigma.bDiff(a) * input[j];
             }
         }
 
