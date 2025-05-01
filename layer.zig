@@ -81,6 +81,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
 
             // Evaluates the compressed differentiable logic gate.
             pub fn eval(sigma: CDLG, a: f32, b: f32) f32 {
+                @setFloatMode(.optimized);
                 const mix = a * b;
                 const half: f32 = sigma.a * (a - mix) + sigma.b * (b - mix) + sigma.mix * mix;
                 return (1 - sigma.neg) * half + sigma.neg * (1 - half);
@@ -88,18 +89,21 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
 
             // The derivative of eval with respect to the first variable.
             pub fn aDiff(sigma: CDLG, b: f32) f32 {
+                @setFloatMode(.optimized);
                 const half = sigma.a * (1 - b) + sigma.b * (-b) + sigma.mix * b;
                 return (1 - 2 * sigma.neg) * half;
             }
 
             // The derivative of eval with respect to the second variable.
             pub fn bDiff(sigma: CDLG, a: f32) f32 {
+                @setFloatMode(.optimized);
                 const half = sigma.a * (-a) + sigma.b * (1 - a) + sigma.mix * a;
                 return (1 - 2 * sigma.neg) * half;
             }
 
             // The gradient of eval with respect to each respective probabilities logits.
             pub fn gradient(sigma: CDLG, a: f32, b: f32) f32x4 {
+                @setFloatMode(.optimized);
                 const mix = a * b;
                 const half: f32 = sigma.a * (a - mix) + sigma.b * (b - mix) + sigma.mix * mix;
                 return .{
@@ -208,6 +212,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         };
 
         fn logistic(x: f32) f32 {
+            @setFloatMode(.optimized);
             return 1 / (1 + @exp(-x));
         }
 
