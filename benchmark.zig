@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const skiffer = @import("skiffer.zig");
-const LogicLayer = skiffer.layer.Logic;
+const LogicLayer = skiffer.layer.PackedLogic;
 const GroupSum = skiffer.layer.GroupSum;
 
 const Model = skiffer.Model(&.{

@@ -60,7 +60,7 @@ pub const LogicOptions = struct {
     seed: u64,
 };
 
-pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
+pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
         pub const input_dim = input_dim_;
@@ -115,7 +115,6 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             }
         };
 
-        diff: [node_count][2]f32 align(64),
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: [node_count]CDLG align(64),
         input_a: [node_count]f32,
@@ -124,7 +123,6 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         lcg: LCG32(1664525, 1013904223, options.seed),
 
         pub const default = Self{
-            .diff = @splat(.{ 0, 0 }),
             .lcg = .init(options.seed),
             .sigma = undefined,
             .input_a = @splat(0),
@@ -233,6 +231,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             self.lcg.reset();
             // For some reason it is faster to to a simple loop rather than a multi item one.
             // I found needless memcpy calls with callgrind.
+            // It is also faster to split the loop into two parts, my guess is that
+            // the first one trashes the cache and the bottom one is vectorized by the compiler.
             for (0..node_count) |j| {
                 const a = input[self.lcg.next() % input_dim];
                 const b = input[self.lcg.next() % input_dim];
@@ -247,7 +247,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             }
         }
 
-        /// Fixme: Create a function "backward" that does not pass delta backwards, applicable for
+        /// Fixme: Create a function "backwardPassFirst" that does not pass delta backwards, applicable for
         /// the first layer in a network only.
         pub fn backwardPass(noalias self: *Self, noalias input: *const [output_dim]f32, noalias cost_gradient: *[node_count]f32x4, noalias output: *[input_dim]f32) void {
             @setFloatMode(.optimized);
