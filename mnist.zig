@@ -99,7 +99,7 @@ pub fn main() !void {
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 100;
+    const epoch_count = 10;
     const batch_size = 32;
     model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), epoch_count, batch_size);
 
