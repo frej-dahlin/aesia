@@ -47,10 +47,10 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     var reader = buffered.reader();
 
     // Assert magic value.
-    assert(try reader.readByte() == 0); // Specified by IDX
-    assert(try reader.readByte() == 0); // --/--
-    assert(try reader.readByte() == 0x08); // 0x08 means bytes.
-    assert(try reader.readByte() == 0x01); // One dimension, label.
+    if (try reader.readByte() != 0) return error.InvalidIDXMagicValue;
+    if (try reader.readByte() != 0) return error.InvalidIDXMagicValue;
+    if (try reader.readByte() != 0x08) return error.InvalidEntrySize;
+    if (try reader.readByte() != 0x01) return error.UnexpectedDimensionCount;
     const label_count = try reader.readInt(u32, .big);
     std.debug.print("Reading {d} labels...\n", .{label_count});
     const labels = try allocator.alloc(Label, label_count);
@@ -58,19 +58,20 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const LogicLayer = skiffer.layer.Logic;
+const LogicLayer = skiffer.layer.PackedLogic;
 const GroupSum = skiffer.layer.GroupSum;
 
+const width = 16_000;
 const Model = skiffer.Model(&.{
-    LogicLayer(784, 16_000, .{ .seed = 0 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 1 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 2 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 3 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 4 }),
-    GroupSum(16_000, 10),
+    LogicLayer(784, width, .{ .seed = 0 }),
+    LogicLayer(width, width, .{ .seed = 1 }),
+    LogicLayer(width, width, .{ .seed = 2 }),
+    LogicLayer(width, width, .{ .seed = 3 }),
+    LogicLayer(width, width, .{ .seed = 4 }),
+    GroupSum(width, 10),
 }, .{
     .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.02 }),
+    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.2 }),
 });
 var model: Model = .default;
 
@@ -98,22 +99,15 @@ pub fn main() !void {
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 5;
+    const epoch_count = 100;
     const batch_size = 32;
     model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), epoch_count, batch_size);
 
     model.lock();
     var correct_count: usize = 0;
     for (images_validate, labels_validate) |image, label| {
-        var max_index: usize = 0;
-        var max: f32 = 0;
-        for (model.eval(&image), 0..) |probability, k| {
-            if (probability > max) {
-                max = probability;
-                max_index = k;
-            }
-        }
-        if (max_index == label) correct_count += 1;
+        const prediction = model.eval(&image);
+        if (std.mem.indexOfMax(f32, prediction) == label) correct_count += 1;
     }
     model.unlock();
     std.debug.print("Correctly classified {d} / {d} ~ {d}%\n", .{ correct_count, images_validate.len, 100 * @as(f32, @floatFromInt(correct_count)) / @as(f32, @floatFromInt(images_validate.len)) });
