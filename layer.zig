@@ -60,6 +60,237 @@ pub const LogicOptions = struct {
     seed: u64,
 };
 
+pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
+    return struct {
+        const Self = @This();
+        pub const input_dim = input_dim_;
+        pub const output_dim = output_dim_;
+        pub const Input = [input_dim]f32;
+        pub const Output = [output_dim]f32;
+        const node_count = output_dim;
+        // There are 16 possible logic gates, we use a novel compressed differentiable representation.
+        pub const parameter_count = 4 * node_count;
+        // For efficient SIMD we ensure that the parameters align to a cacheline.
+        pub const parameter_alignment = 64;
+
+        const CDLG = struct {
+            a: f32,
+            b: f32,
+            mix: f32,
+            neg: f32,
+
+            // Evaluates the compressed differentiable logic gate.
+            pub fn eval(sigma: CDLG, a: f32, b: f32) f32 {
+                @setFloatMode(.optimized);
+                const mix = a * b;
+                const half: f32 = sigma.a * (a - mix) + sigma.b * (b - mix) + sigma.mix * mix;
+                return (1 - sigma.neg) * half + sigma.neg * (1 - half);
+            }
+
+            // The derivative of eval with respect to the first variable.
+            pub fn aDiff(sigma: CDLG, b: f32) f32 {
+                @setFloatMode(.optimized);
+                const half = sigma.a * (1 - b) + sigma.b * (-b) + sigma.mix * b;
+                return (1 - 2 * sigma.neg) * half;
+            }
+
+            // The derivative of eval with respect to the second variable.
+            pub fn bDiff(sigma: CDLG, a: f32) f32 {
+                @setFloatMode(.optimized);
+                const half = sigma.a * (-a) + sigma.b * (1 - a) + sigma.mix * a;
+                return (1 - 2 * sigma.neg) * half;
+            }
+
+            // The gradient of eval with respect to each respective probabilities logits.
+            pub fn gradient(sigma: CDLG, a: f32, b: f32) f32x4 {
+                @setFloatMode(.optimized);
+                const mix = a * b;
+                const half: f32 = sigma.a * (a - mix) + sigma.b * (b - mix) + sigma.mix * mix;
+                return .{
+                    (1 - 2 * sigma.neg) * sigma.a * (1 - sigma.a) * (a - mix),
+                    (1 - 2 * sigma.neg) * sigma.b * (1 - sigma.b) * (b - mix),
+                    (1 - 2 * sigma.neg) * sigma.mix * (1 - sigma.mix) * mix,
+                    sigma.neg * (1 - sigma.neg) * (1 - 2 * half),
+                };
+            }
+        };
+
+        diff: [node_count][2]f32 align(64),
+        /// The preprocessed parameters, computed by softmax(parameters).
+        sigma: [node_count]CDLG align(64),
+        input_a: [node_count]f32,
+        input_b: [node_count]f32,
+        /// Generates the random inputs on-the-fly.
+        lcg: LCG32(1664525, 1013904223, options.seed),
+
+        pub const default = Self{
+            .diff = @splat(.{ 0, 0 }),
+            .lcg = .init(options.seed),
+            .sigma = undefined,
+            .input_a = @splat(0),
+            .input_b = @splat(0),
+        };
+
+        pub const default_parameters: [parameter_count]f32 =
+            @bitCast(@as([node_count]f32x4, @splat(.{ 0, 0, 1, 1 })));
+
+        /// Gate namespace for SIMD vector of relaxed logic gates.
+        const gate = struct {
+            /// Returns a vector representing all values of a soft logic gate.
+            /// Only intended for reference. The current implementation
+            /// inlines this construction in forwardPass.
+            fn vector(a: f32, b: f32) f32x16 {
+                @setFloatMode(.optimized);
+                return .{
+                    0, // false
+                    a * b, // and
+                    a - a * b, // a and not b
+                    a, // passthrough a
+                    b - a * b, // b and not a
+                    b, // passthrough b
+                    a + b - 2 * a * b, // xor
+                    a + b - a * b, // xnor
+                    // The following values are simply negation of the above ones in order.
+                    // Many authors reverse this order, i.e. true is the last gate,
+                    // however this leads to a less efficient SIMD construction of the vector.
+                    1,
+                    1 - a * b,
+                    1 - (a - a * b),
+                    1 - a,
+                    1 - (b - a * b),
+                    1 - b,
+                    1 - (a + b - 2 * a * b),
+                    1 - (a + b - a * b),
+                };
+            }
+
+            /// Returns the soft gate vector differentiated by the first variable.
+            /// Note that it only depends on the second variable.
+            fn aDiff(b: f32) f32x16 {
+                @setFloatMode(.optimized);
+                return .{
+                    0,
+                    b,
+                    1 - b,
+                    1,
+                    -b,
+                    0,
+                    1 - 2 * b,
+                    0,
+                    0,
+                    -b,
+                    -(1 - b),
+                    -1,
+                    b,
+                    0,
+                    -(1 - 2 * b),
+                    0,
+                };
+            }
+
+            /// Returns the soft gate vector differentiated by the second variable.
+            /// Note that it only depends on the first variable.
+            fn bDiff(a: f32) f32x16 {
+                @setFloatMode(.optimized);
+                return .{
+                    0,
+                    a,
+                    -a,
+                    0,
+                    1 - a,
+                    1,
+                    1 - 2 * a,
+                    1 - a,
+                    0,
+                    -a,
+                    a,
+                    0,
+                    -(1 - a),
+                    -1,
+                    -(1 - 2 * a),
+                    -(1 - a),
+                };
+            }
+        };
+
+        fn logistic(x: f32) f32 {
+            @setFloatMode(.optimized);
+            return 1 / (1 + @exp(-x));
+        }
+
+        pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
+            @setFloatMode(.optimized);
+            self.lcg.reset();
+            for (self.sigma, output) |sigma, *activation| {
+                const a = input[self.lcg.next() % input_dim];
+                const b = input[self.lcg.next() % input_dim];
+                activation.* = sigma.eval(a, b);
+            }
+        }
+
+        pub fn forwardPass(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
+            @setFloatMode(.optimized);
+            self.lcg.reset();
+            // For some reason it is faster to to a simple loop rather than a multi item one.
+            // I found needless memcpy calls with callgrind.
+            for (0..node_count) |j| {
+                const a = input[self.lcg.next() % input_dim];
+                const b = input[self.lcg.next() % input_dim];
+                self.input_a[j] = a;
+                self.input_b[j] = b;
+            }
+            for (0..node_count) |j| {
+                const a = self.input_a[j];
+                const b = self.input_b[j];
+                const sigma = self.sigma[j];
+                output[j] = sigma.eval(a, b);
+            }
+        }
+
+        /// Fixme: Create a function "backward" that does not pass delta backwards, applicable for
+        /// the first layer in a network only.
+        pub fn backwardPass(noalias self: *Self, noalias input: *const [output_dim]f32, noalias cost_gradient: *[node_count]f32x4, noalias output: *[input_dim]f32) void {
+            @setFloatMode(.optimized);
+            self.lcg.reset();
+            @memset(output, 0);
+            for (0..node_count) |j| {
+                const parent_a = self.lcg.next() % input_dim;
+                const parent_b = self.lcg.next() % input_dim;
+                const a = self.input_a[j];
+                const b = self.input_b[j];
+                const sigma = self.sigma[j];
+                cost_gradient[j] += sigma.gradient(a, b) * @as(f32x4, @splat(input[j]));
+                output[parent_a] += sigma.aDiff(b) * input[j];
+                output[parent_b] += sigma.bDiff(a) * input[j];
+            }
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *[node_count]f32x4) void {
+            @setFloatMode(.optimized);
+            for (&self.sigma, parameters) |*sigma, logit| {
+                sigma.a = logistic(logit[0]);
+                sigma.b = logistic(logit[1]);
+                sigma.mix = logistic(logit[2]);
+                sigma.neg = logistic(logit[3]);
+            }
+        }
+
+        pub fn giveParameters(self: *Self) void {
+            _ = self;
+        }
+
+        pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
+            _ = self;
+            _ = parameters;
+        }
+
+        pub fn returnParameters(self: *Self) void {
+            _ = self;
+        }
+    };
+}
+
+/// A faster and leaner differentiable logic gate.
 pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
