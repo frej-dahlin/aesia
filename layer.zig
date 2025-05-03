@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 
 const f32x16 = @Vector(16, f32);
 const f32x8 = @Vector(8, f32);
+const f32x4 = @Vector(4, f32);
 const f32x2 = @Vector(2, f32);
 
 /// A layer is a type interface, it needs to declare:
