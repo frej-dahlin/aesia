@@ -354,16 +354,16 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
 
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: [node_count]CDLG align(64),
-        input_a: [node_count]f32,
-        input_b: [node_count]f32,
+        inputs: [node_count][2]f32,
+        parents: [node_count][2]std.math.IntFittingRange(0, input_dim - 1),
         /// Generates the random inputs on-the-fly.
         lcg: LCG32(1664525, 1013904223, options.seed),
 
         pub const default = Self{
             .lcg = .init(options.seed),
             .sigma = undefined,
-            .input_a = @splat(0),
-            .input_b = @splat(0),
+            .inputs = undefined,
+            .parents = undefined,
         };
 
         pub const default_parameters: [parameter_count]f32 =
@@ -455,30 +455,26 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
-            self.lcg.reset();
-            for (self.sigma, output) |sigma, *activation| {
-                const a = input[self.lcg.next() % input_dim];
-                const b = input[self.lcg.next() % input_dim];
+            for (self.sigma, output, 0..) |sigma, *activation, j| {
+                const a = input[self.parents[j][0]];
+                const b = input[self.parents[j][1]];
                 activation.* = sigma.eval(a, b);
             }
         }
 
         pub fn forwardPass(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
-            self.lcg.reset();
             // For some reason it is faster to to a simple loop rather than a multi item one.
             // I found needless memcpy calls with callgrind.
             // It is also faster to split the loop into two parts, my guess is that
             // the first one trashes the cache and the bottom one is vectorized by the compiler.
             for (0..node_count) |j| {
-                const a = input[self.lcg.next() % input_dim];
-                const b = input[self.lcg.next() % input_dim];
-                self.input_a[j] = a;
-                self.input_b[j] = b;
+                const a = input[self.parents[j][0]];
+                const b = input[self.parents[j][1]];
+                self.inputs[j] = .{ a, b };
             }
             for (0..node_count) |j| {
-                const a = self.input_a[j];
-                const b = self.input_b[j];
+                const a, const b = self.inputs[j];
                 const sigma = self.sigma[j];
                 output[j] = sigma.eval(a, b);
             }
@@ -491,14 +487,11 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
             self.lcg.reset();
             @memset(output, 0);
             for (0..node_count) |j| {
-                const parent_a = self.lcg.next() % input_dim;
-                const parent_b = self.lcg.next() % input_dim;
-                const a = self.input_a[j];
-                const b = self.input_b[j];
+                const a, const b = self.inputs[j];
                 const sigma = self.sigma[j];
                 cost_gradient[j] += sigma.gradient(a, b) * @as(f32x4, @splat(input[j]));
-                output[parent_a] += sigma.aDiff(b) * input[j];
-                output[parent_b] += sigma.bDiff(a) * input[j];
+                output[self.parents[j][0]] += sigma.aDiff(b) * input[j];
+                output[self.parents[j][1]] += sigma.bDiff(a) * input[j];
             }
         }
 
@@ -509,6 +502,13 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
                 sigma.b = logistic(logit[1]);
                 sigma.mix = logistic(logit[2]);
                 sigma.neg = logistic(logit[3]);
+            }
+            self.lcg.reset();
+            for (0..node_count) |j| {
+                self.parents[j] = .{
+                    @truncate(self.lcg.next() % input_dim),
+                    @truncate(self.lcg.next() % input_dim),
+                };
             }
         }
 
