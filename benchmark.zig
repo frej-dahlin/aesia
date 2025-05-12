@@ -23,14 +23,14 @@ const ModelNew = skiffer.Model(&.{
     GroupSum(16_000, 10),
 }, .{ .Optimizer = null, .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10) });
 
-var model_old: ModelOld = .default;
-var model_new: ModelNew = .default;
+var model_old: ModelOld = undefined;
+var model_new: ModelNew = undefined;
 
 const count = 1000;
 
 pub fn main() !void {
-    model_old.initParameters();
-    model_new.initParameters();
+    model_old.init();
+    model_new.init();
     _ = count;
     const features: [count][784]f32 = @splat(@splat(0));
     const labels: [count]u8 = @splat(0);

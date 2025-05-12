@@ -64,8 +64,10 @@ pub const AdamOptions = struct {
 };
 
 pub fn Adam(options: AdamOptions) fn (usize) type {
-    if (options.learn_rate <= 0) @compileError(comptimePrint("Adam: invalid learn_rate {d} <= 0", .{options.learn_rate}));
-    if (options.epsilon <= 0) @compileError(comptimePrint("Adam: invalid epsilon {d} <= 0", .{options.epsilon}));
+    if (options.learn_rate <= 0)
+        @compileError(comptimePrint("Adam: invalid learn_rate {d} <= 0", .{options.learn_rate}));
+    if (options.epsilon <= 0)
+        @compileError(comptimePrint("Adam: invalid epsilon {d} <= 0", .{options.epsilon}));
     return struct {
         pub fn Optimizer(parameter_count: usize) type {
             assertParameterCount(parameter_count);
@@ -85,7 +87,11 @@ pub fn Adam(options: AdamOptions) fn (usize) type {
                     .v = @splat(@splat(0)),
                 };
 
-                pub fn step(self: *Self, parameters: *[vector_count]Vector, gradient: *[vector_count]Vector) void {
+                pub fn step(
+                    self: *Self,
+                    parameters: *[vector_count]Vector,
+                    gradient: *[vector_count]Vector,
+                ) void {
                     @setFloatMode(.optimized);
                     for (parameters, gradient, &self.m, &self.v) |*parameter, partial, *m, *v| {
                         m.* = @as(Vector, @splat(beta[0])) * m.* +

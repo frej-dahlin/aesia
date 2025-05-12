@@ -61,22 +61,23 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
 const LogicLayer = skiffer.layer.PackedLogic;
 const GroupSum = skiffer.layer.GroupSum;
 
-const width = 16_000;
+const width = 8_000;
 const Model = skiffer.Model(&.{
     LogicLayer(784, width, .{ .seed = 0 }),
     LogicLayer(width, width, .{ .seed = 1 }),
     LogicLayer(width, width, .{ .seed = 2 }),
     LogicLayer(width, width, .{ .seed = 3 }),
     LogicLayer(width, width, .{ .seed = 4 }),
+    LogicLayer(width, width, .{ .seed = 5 }),
     GroupSum(width, 10),
 }, .{
     .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.2 }),
+    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.02 }),
 });
-var model: Model = .default;
+var model: Model = undefined;
 
 pub fn main() !void {
-    model.initParameters();
+    model.init();
 
     const allocator = std.heap.page_allocator;
     const images_training = try loadImages(allocator, "data/train-images-idx3-ubyte.gz");
@@ -99,7 +100,7 @@ pub fn main() !void {
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 10;
+    const epoch_count = 30;
     const batch_size = 32;
     model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), epoch_count, batch_size);
 
