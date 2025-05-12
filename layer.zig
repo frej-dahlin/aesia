@@ -4,38 +4,9 @@ const assert = std.debug.assert;
 const f32x16 = @Vector(16, f32);
 const f32x8 = @Vector(8, f32);
 const f32x4 = @Vector(4, f32);
-const f32x2 = @Vector(2, f32);
-
-/// Linear Congruential Multiplier modulo 2^32. Used for fast pseudo random numbers.
-/// It is likely that the ability to invert the number generator will be important to 'efficiently' update
-// a logic gate network.
-pub fn LCG32(multiplier: u32, increment: u32, initial_seed: u32) type {
-    return struct {
-        const Self = @This();
-        seed: u32,
-
-        pub const default = Self{ .seed = initial_seed };
-
-        pub fn next(self: *Self) u32 {
-            self.seed *%= multiplier;
-            self.seed +%= increment;
-            return self.seed;
-        }
-
-        pub fn reset(self: *Self) void {
-            self.seed = initial_seed;
-        }
-
-        pub fn init(seed_: u32) Self {
-            return Self{
-                .seed = seed_,
-            };
-        }
-    };
-}
 
 pub const LogicOptions = struct {
-    seed: u64,
+    rand: *std.Random,
 };
 
 pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
@@ -46,6 +17,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         pub const Input = [input_dim]f32;
         pub const Output = [output_dim]f32;
         const node_count = output_dim;
+        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
         // There are 16 possible logic gates, each one is assigned a probability logit.
         pub const parameter_count = 16 * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
@@ -55,15 +27,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         diff: [node_count][2]f32 align(64),
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: ?*[node_count]f32x16 align(64),
-        /// Generates the random inputs on-the-fly.
-        lcg: LCG32(1664525, 1013904223, options.seed),
-
-        pub const default = Self{
-            .gradient = @splat(@splat(0)),
-            .diff = @splat(.{ 0, 0 }),
-            .lcg = .init(options.seed),
-            .sigma = null,
-        };
+        parents: [node_count][2]ParentIndex,
 
         /// Gate namespace for SIMD vector of relaxed logic gates.
         const gate = struct {
@@ -150,8 +114,14 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                 .sigma = null,
                 .gradient = undefined,
                 .diff = undefined,
-                .lcg = .default,
+                .parents = undefined,
             };
+            for (0..node_count) |j| {
+                self.parents[j] = .{
+                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                };
+            }
         }
 
         /// Logits are normalized such that max(logits) == 0.
@@ -167,39 +137,17 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             return sigma / @as(f32x16, @splat(denom));
         }
 
-        fn softmax(logit: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            const sigma = @exp(maxNormalize(logit));
-            const denom = @reduce(.Add, sigma);
-            return sigma / @as(f32x16, @splat(denom));
-        }
-
-        fn softmaxInverse(sigma: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            return @log(sigma);
-        }
-
         fn softmax2Inverse(sigma: f32x16) f32x16 {
             @setFloatMode(.optimized);
             return @log2(sigma);
         }
 
-        // Computes (1 + x / 256)^256.
-        fn softmaxApprox(logit: f32x16) f32x16 {
-            @setFloatMode(.optimized);
-            const scale = @as(f32x16, @splat(@as(f32, 1.0 / 256.0)));
-            var ret = @as(f32x16, @splat(1)) + maxNormalize(logit) * scale;
-            inline for (0..8) |_| ret *= ret;
-            return ret / @as(f32x16, @splat(@reduce(.Add, ret)));
-        }
-
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
             assert(self.sigma != null);
-            self.lcg.reset();
-            for (self.sigma.?, output) |sigma, *activation| {
-                const a = input[self.lcg.next() % input_dim];
-                const b = input[self.lcg.next() % input_dim];
+            for (self.sigma.?, output, self.parents) |sigma, *activation, parents| {
+                const a = input[parents[0]];
+                const b = input[parents[1]];
                 activation.* = @reduce(.Add, sigma * gate.vector(a, b));
             }
         }
@@ -207,12 +155,11 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         pub fn forwardPass(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             @setFloatMode(.optimized);
             assert(self.sigma != null);
-            self.lcg.reset();
             // For some reason it is faster to to a simple loop rather than a multi item one.
             // I found needless memcpy calls with callgrind.
             for (0..node_count) |j| {
-                const a = input[self.lcg.next() % input_dim];
-                const b = input[self.lcg.next() % input_dim];
+                const a = input[self.parents[j][0]];
+                const b = input[self.parents[j][1]];
 
                 // Inline construction of gateVector(a, b), diff_a(b), and Gate.diff_b(a).
                 // We do it in this way since all three depend on mix_coef, and two out of three
@@ -245,14 +192,11 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         /// the first layer in a network only.
         pub fn backwardPass(noalias self: *Self, noalias input: *const [output_dim]f32, noalias cost_gradient: *[node_count]f32x16, noalias output: *[input_dim]f32) void {
             @setFloatMode(.optimized);
-            self.lcg.reset();
             @memset(output, 0);
             for (0..node_count) |j| {
-                const parent_a = self.lcg.next() % input_dim;
-                const parent_b = self.lcg.next() % input_dim;
                 cost_gradient[j] += self.gradient[j] * @as(f32x16, @splat(input[j]));
-                output[parent_a] += self.diff[j][0] * input[j];
-                output[parent_b] += self.diff[j][1] * input[j];
+                output[self.parents[j][0]] += self.diff[j][0] * input[j];
+                output[self.parents[j][1]] += self.diff[j][1] * input[j];
             }
         }
 
@@ -290,6 +234,7 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
         pub const Input = [input_dim]f32;
         pub const Output = [output_dim]f32;
         const node_count = output_dim;
+        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
         // There are 16 possible logic gates, we use a novel packed representation.
         pub const parameter_count = 4 * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
@@ -345,9 +290,7 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
         /// The preprocessed parameters, computed by softmax(parameters).
         sigma: [node_count]f32x4 align(64),
         inputs: [node_count][2]f32,
-        parents: [node_count][2]std.math.IntFittingRange(0, input_dim - 1),
-        /// Generates the random inputs on-the-fly.
-        lcg: LCG32(1664525, 1013904223, options.seed),
+        parents: [node_count][2]ParentIndex,
 
         fn logistic(x: f32x4) f32x4 {
             @setFloatMode(.optimized);
@@ -360,13 +303,11 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
                 .sigma = undefined,
                 .inputs = undefined,
                 .parents = undefined,
-                .lcg = .default,
             };
-            self.lcg.reset();
             for (0..node_count) |j| {
                 self.parents[j] = .{
-                    @truncate(self.lcg.next() % input_dim),
-                    @truncate(self.lcg.next() % input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
                 };
             }
         }
@@ -415,7 +356,6 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
             noalias output: *[input_dim]f32,
         ) void {
             @setFloatMode(.optimized);
-            self.lcg.reset();
             @memset(output, 0);
             for (0..node_count) |j| {
                 const a, const b = self.inputs[j];
@@ -484,8 +424,8 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
 }
 
 pub const MultiLogicOptions = struct {
-    seed: u64,
     arity: usize,
+    rand: *std.Random,
 };
 
 pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogicOptions) type {
@@ -495,8 +435,9 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
         pub const output_dim = output_dim_;
         pub const Input = [input_dim]f32;
         pub const Output = [output_dim]f32;
-        const node_count = output_dim;
 
+        const node_count = output_dim;
+        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
         const arity = options.arity;
         const vector_len = 1 << arity;
         const Vector = @Vector(vector_len, f32);
@@ -558,8 +499,6 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
         gates: [node_count]Gate align(64),
         inputs: [node_count][arity]f32,
         parents: [node_count][arity]std.math.IntFittingRange(0, input_dim - 1),
-        /// Generates the random inputs on-the-fly.
-        lcg: LCG32(1664525, 1013904223, options.seed),
 
         fn logistic(x: Vector) Vector {
             @setFloatMode(.optimized);
@@ -575,11 +514,11 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
                 .gates = undefined,
                 .inputs = undefined,
                 .parents = undefined,
-                .lcg = .default,
             };
-            self.lcg.reset();
             for (0..node_count) |j| {
-                inline for (&self.parents[j]) |*parent| parent.* = @truncate(self.lcg.next() % input_dim);
+                inline for (&self.parents[j]) |*parent| {
+                    parent.* = options.rand.intRangeLessThan(ParentIndex, 0, input_dim);
+                }
             }
         }
 
@@ -627,7 +566,6 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
             noalias output: *[input_dim]f32,
         ) void {
             @setFloatMode(.optimized);
-            self.lcg.reset();
             @memset(output, 0);
             for (0..node_count) |j| {
                 const gate = &self.gates[j];

@@ -58,21 +58,23 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
+const MultiLogic = skiffer.layer.MultiLogicGate;
 const LogicLayer = skiffer.layer.PackedLogic;
 const GroupSum = skiffer.layer.GroupSum;
 
-const width = 8_000;
+var pcg = std.Random.Pcg.init(0);
+var rand = pcg.random();
+const width = 1_000;
 const Model = skiffer.Model(&.{
-    LogicLayer(784, width, .{ .seed = 0 }),
-    LogicLayer(width, width, .{ .seed = 1 }),
-    LogicLayer(width, width, .{ .seed = 2 }),
-    LogicLayer(width, width, .{ .seed = 3 }),
-    LogicLayer(width, width, .{ .seed = 4 }),
-    LogicLayer(width, width, .{ .seed = 5 }),
+    MultiLogic(784, width, .{ .arity = 3, .rand = &rand }),
+    MultiLogic(width, width, .{ .arity = 3, .rand = &rand }),
+    MultiLogic(width, width, .{ .arity = 3, .rand = &rand }),
+    MultiLogic(width, width, .{ .arity = 3, .rand = &rand }),
+    MultiLogic(width, width, .{ .arity = 3, .rand = &rand }),
     GroupSum(width, 10),
 }, .{
     .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.02 }),
+    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.01 }),
 });
 var model: Model = undefined;
 
@@ -96,11 +98,11 @@ pub fn main() !void {
     // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
     // model.unlock();
 
-    const training_count = 60_000;
+    const training_count = 10_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 30;
+    const epoch_count = 90;
     const batch_size = 32;
     model.train(.init(images_training[0..training_count], labels_training[0..training_count]), .init(images_validate[0..validate_count], labels_validate[0..validate_count]), epoch_count, batch_size);
 
