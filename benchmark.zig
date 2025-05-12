@@ -5,21 +5,24 @@ const LogicLayer = skiffer.layer.Logic;
 const PackedLogicLayer = skiffer.layer.PackedLogic;
 const GroupSum = skiffer.layer.GroupSum;
 
+var pcg = std.Random.Pcg.init(0);
+var rand = pcg.random();
+
 const ModelOld = skiffer.Model(&.{
-    LogicLayer(784, 16_000, .{ .seed = 0 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 1 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 2 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 3 }),
-    LogicLayer(16_000, 16_000, .{ .seed = 4 }),
+    LogicLayer(784, 16_000, .{ .rand = &rand }),
+    LogicLayer(16_000, 16_000, .{ .rand = &rand }),
+    LogicLayer(16_000, 16_000, .{ .rand = &rand }),
+    LogicLayer(16_000, 16_000, .{ .rand = &rand }),
+    LogicLayer(16_000, 16_000, .{ .rand = &rand }),
     GroupSum(16_000, 10),
 }, .{ .Optimizer = null, .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10) });
 
 const ModelNew = skiffer.Model(&.{
-    PackedLogicLayer(784, 16_000, .{ .seed = 0 }),
-    PackedLogicLayer(16_000, 16_000, .{ .seed = 1 }),
-    PackedLogicLayer(16_000, 16_000, .{ .seed = 2 }),
-    PackedLogicLayer(16_000, 16_000, .{ .seed = 3 }),
-    PackedLogicLayer(16_000, 16_000, .{ .seed = 4 }),
+    PackedLogicLayer(784, 16_000, .{ .rand = &rand }),
+    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
+    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
+    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
+    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
     GroupSum(16_000, 10),
 }, .{ .Optimizer = null, .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10) });
 
