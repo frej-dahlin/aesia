@@ -355,7 +355,7 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
         }
 
         pub fn init(self: *Self, parameters: *[parameter_count]f32) void {
-            parameters.* = @bitCast(@as([node_count]f32x4, @splat(.{ 0, 0, 1, 1 })));
+            parameters.* = @bitCast(@as([node_count]f32x4, @splat(.{ 4, 4, 0, 0 })));
             self.* = .{
                 .sigma = undefined,
                 .inputs = undefined,
@@ -479,6 +479,181 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
                 const to = from + quot;
                 for (output[from..to]) |*parent| parent.* = child * scale;
             }
+        }
+    };
+}
+
+pub const MultiLogicOptions = struct {
+    seed: u64,
+    arity: usize,
+};
+
+pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogicOptions) type {
+    return struct {
+        const Self = @This();
+        pub const input_dim = input_dim_;
+        pub const output_dim = output_dim_;
+        pub const Input = [input_dim]f32;
+        pub const Output = [output_dim]f32;
+        const node_count = output_dim;
+
+        const arity = options.arity;
+        const vector_len = 1 << arity;
+        const Vector = @Vector(vector_len, f32);
+
+        pub const parameter_count = vector_len * node_count;
+        // For efficient SIMD we ensure that the parameters align to a cacheline.
+        pub const parameter_alignment: usize = 64;
+
+        const Gate = struct {
+            sigma: Vector,
+            // Evaluates the packed differentiable logic gate.
+            pub fn eval(gate: *const Gate, input: *const [arity]f32) f32 {
+                @setFloatMode(.optimized);
+                var result: f32 = 0;
+                inline for (0..vector_len) |i| {
+                    var product: f32 = gate.sigma[i];
+                    inline for (input, 0..) |x, bit| {
+                        product *= if ((1 << bit) & i != 0) x else (1 - x);
+                    }
+                    result += product;
+                }
+                return result;
+            }
+
+            pub fn diff(gate: *const Gate, input: *const [arity]f32, j: usize) f32 {
+                @setFloatMode(.optimized);
+                var result: f32 = 0;
+                inline for (0..vector_len) |i| {
+                    var product: f32 = gate.sigma[i];
+                    inline for (input, 0..) |x, bit| {
+                        if (bit != j) {
+                            product *= if ((1 << bit) & i != 0) x else (1 - x);
+                        } else {
+                            product *= if ((1 << bit) & i != 0) 1 else -1;
+                        }
+                    }
+                    result += product;
+                }
+                return result;
+            }
+
+            pub fn gradient(
+                gate: *const Gate,
+                input: *const [arity]f32,
+            ) Vector {
+                @setFloatMode(.optimized);
+                var result: Vector = undefined;
+                inline for (0..vector_len) |j| {
+                    var product: f32 = (1 - gate.sigma[j]) * gate.sigma[j];
+                    inline for (input, 0..) |x, bit| {
+                        product *= if ((1 << bit) & j != 0) x else (1 - x);
+                    }
+                    result[j] = product;
+                }
+                return result;
+            }
+        };
+
+        gates: [node_count]Gate align(64),
+        inputs: [node_count][arity]f32,
+        parents: [node_count][arity]std.math.IntFittingRange(0, input_dim - 1),
+        /// Generates the random inputs on-the-fly.
+        lcg: LCG32(1664525, 1013904223, options.seed),
+
+        fn logistic(x: Vector) Vector {
+            @setFloatMode(.optimized);
+            return @as(Vector, @splat(1)) / (@as(Vector, @splat(1)) + @exp(-x));
+        }
+
+        pub fn init(self: *Self, parameters: *[parameter_count]f32) void {
+            parameters.* = @bitCast(@as(
+                [node_count]Vector,
+                @splat(.{4} ** (vector_len / 2) ++ .{0} ** (vector_len / 2)),
+            ));
+            self.* = .{
+                .gates = undefined,
+                .inputs = undefined,
+                .parents = undefined,
+                .lcg = .default,
+            };
+            self.lcg.reset();
+            for (0..node_count) |j| {
+                inline for (&self.parents[j]) |*parent| parent.* = @truncate(self.lcg.next() % input_dim);
+            }
+        }
+
+        pub fn eval(
+            noalias self: *Self,
+            noalias input: *const Input,
+            noalias output: *Output,
+        ) void {
+            @setFloatMode(.optimized);
+            var arguments: [arity]f32 = undefined;
+            for (self.gates, output, 0..) |gate, *activation, j| {
+                inline for (&arguments, self.parents[j]) |*argument, parent| {
+                    argument.* = input[parent];
+                }
+                activation.* = gate.eval(&arguments);
+            }
+        }
+
+        pub fn forwardPass(
+            noalias self: *Self,
+            noalias input: *const Input,
+            noalias output: *Output,
+        ) void {
+            @setFloatMode(.optimized);
+            // For some reason it is faster to to a simple loop rather than a multi item one.
+            // I found needless memcpy calls with callgrind.
+            // It is also faster to split the loop into two parts, my guess is that
+            // the first one trashes the cache and the bottom one is vectorized by the compiler.
+            for (0..node_count) |j| {
+                inline for (self.parents[j], &self.inputs[j]) |parent, *gate_input| {
+                    gate_input.* = input[parent];
+                }
+            }
+            for (0..node_count) |j| {
+                output[j] = self.gates[j].eval(&self.inputs[j]);
+            }
+        }
+
+        /// Fixme: Create a function "backwardPassFirst" that does not pass delta backwards,
+        ///  applicable for the first layer in a network only.
+        pub fn backwardPass(
+            noalias self: *Self,
+            noalias input: *const [output_dim]f32,
+            noalias cost_gradient: *[node_count]Vector,
+            noalias output: *[input_dim]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            self.lcg.reset();
+            @memset(output, 0);
+            for (0..node_count) |j| {
+                const gate = &self.gates[j];
+                cost_gradient[j] += gate.gradient(&self.inputs[j]) * @as(Vector, @splat(input[j]));
+                inline for (self.parents[j], 0..) |parent, k| {
+                    output[parent] += gate.diff(&self.inputs[j], k) * input[j];
+                }
+            }
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *[node_count]Vector) void {
+            @setFloatMode(.optimized);
+            for (0..node_count) |j| self.gates[j].sigma = logistic(parameters[j]);
+        }
+
+        pub fn giveParameters(self: *Self) void {
+            _ = self;
+        }
+
+        pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
+            _ = self;
+            _ = parameters;
+        }
+
+        pub fn returnParameters(self: *Self) void {
+            _ = self;
         }
     };
 }

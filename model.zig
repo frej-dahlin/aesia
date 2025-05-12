@@ -26,8 +26,8 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
         const parameter_alignment = @max(Network.parameter_alignment, @alignOf(@Vector(vector_len, f32)));
 
         pub const Feature = Network.Input;
-        pub const input_dim = Network.input_dim;
         pub const Prediction = Network.Output;
+        pub const input_dim = Network.input_dim;
         pub const output_dim = Network.output_dim;
         pub const Optimizer = (if (options.Optimizer) |O| O else skiffer.optimizer.Adam(.default))(parameter_count);
         pub const Loss = if (options.Loss) |L| L else skiffer.loss.HalvedMeanSquareError(output_dim);
@@ -67,16 +67,10 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
         optimizer: Optimizer,
         locked: bool,
 
-        pub const default = Self{
-            .network = .default,
-            .parameters = @splat(0),
-            .gradient = @splat(0),
-            .optimizer = .default,
-            .locked = false,
-        };
-
-        pub fn initParameters(self: *Self) void {
-            self.network.initParameters(&self.parameters);
+        pub fn init(self: *Self) void {
+            self.network.init(&self.parameters);
+            self.optimizer = .default;
+            self.locked = false;
         }
 
         pub fn eval(model: *Self, input: *const Feature) *const Prediction {
