@@ -233,7 +233,9 @@ pub fn Network(Layers: []const type) type {
         };
         const buffer_size = blk: {
             var max: usize = 0;
-            for (Layers) |Layer| max = @max(max, @sizeOf(Layer.Output));
+            // Fixme: @sizeOf(Layer.Input) is only required because we do not have a
+            // backwardPassFinal function.
+            for (Layers) |Layer| max = @max(max, @max(@sizeOf(Layer.Input), @sizeOf(Layer.Output)));
             break :blk max;
         };
 
