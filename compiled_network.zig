@@ -256,20 +256,6 @@ pub fn Network(Layers: []const type) type {
             .buffer = .default,
         };
 
-        pub fn writeToFile(parameters: *[parameter_count]f32, path: []const u8) !void {
-            const file = try std.fs.cwd().createFile(path, .{});
-            defer file.close();
-
-            var buffered = std.io.bufferedWriter(file.writer());
-            var writer = buffered.writer();
-            inline for (parameter_ranges) |range| {
-                if (range.len > 0) {
-                    const slice = parameters[range.from..range.to()];
-                    try writer.writeAll(std.mem.sliceAsBytes(slice));
-                }
-            }
-        }
-
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
@@ -286,109 +272,27 @@ pub fn Network(Layers: []const type) type {
             return buffer.front(Output);
         }
 
-        /// The network does *not* always own its parameters.
-        /// The design of this mechanism has three reasons:
-        /// 1. Enabling amortization of expensive operations over the number of evaluations
-        ///    inbetween. For example logic layers need to compute softmax of its parameters,
-        ///    when training this cost is amortized over the batch size.
-        /// 2. A model can ultimately own the parameters in a big flat array. This makes
-        ///    the step part of gradient descent trivial to implement.
-        /// 3. Each thread can own a separate network that is used for parallel computations,
-        ///    while sharing the paremeters with the other threads. The main thread owns the
-        ///    parameters and should call (take|give)Parameters, the worker threads instead
-        ///    call (borrow|return)Parameters, but only *after* the main thread has succesfully
-        ///    taken/given them.
-        /// Takes ownership of an array of parameters, preprocessing them, if necessary.
-        pub fn takeParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (&self.layers, parameter_ranges) |*layer, range| {
-                const slice = range.slice(f32, parameters);
-                if (range.len > 0) layer.takeParameters(@alignCast(@ptrCast(slice)));
-            }
-        }
+        const parameter_count_no_padding = blk: {
+            var count: usize = 0;
+            inline for (parameter_ranges) |range| count += range.len;
+            break :blk count;
+        };
+        pub fn compileFromFile(self: *Self, path: []const u8) !void {
+            const file = try std.fs.openFile(path, .{});
+            defer file.close();
 
-        /// Gives the parameters back, postprocessing them, if necessary.
-        pub fn giveParameters(self: *Self) void {
-            inline for (Layers, &self.layers) |Layer, *layer| {
-                if (comptime tag(Layer) == .trainable) layer.giveParameters();
-            }
-        }
+            var buffered = std.io.bufferedReader(file.reader());
+            var reader = buffered.reader();
 
-        /// Borrows parameters, without preprocessing, called by worker threads after the
-        /// main thread has called takeParameters.
-        pub fn borrowParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (self.layers, parameter_ranges) |*layer, range| {
-                const slice = range.slice(f32, &parameters);
-                if (range.len > 0) layer.borrowParameters(@alignCast(@ptrCast(slice)));
-            }
-        }
-
-        /// Returns parameters, without postprocessing, called by worker threads before the
-        /// main thread calls giveParameters.
-        pub fn returnParameters(self: *Self) void {
-            inline for (self.layers) |*layer| {
-                if (layer.parameter_count > 0) layer.returnParameters();
-            }
-        }
-
-        pub fn init(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (Layers, &self.layers, parameter_ranges) |Layer, *layer, range| {
-                if (@sizeOf(Layer) == 0) continue;
+            const allocator = std.heap.page_allocator;
+            const bytes = try reader.readAllAlloc(allocator, @sizeOf([parameter_count_no_padding]f32));
+            const parameters = std.mem.bytesAsSlice(f32, bytes);
+            inline for (layers, parameter_ranges) |*layer, range| {
                 if (range.len > 0) {
-                    const slice: *[range.len]f32 = @alignCast(@ptrCast(parameters[range.from..range.to()]));
-                    layer.init(slice);
-                } else {
-                    layer.init();
+                    const slice = parameters[range.from..range.to()];
+                    layer.compile()
                 }
             }
-        }
-
-        /// Evaluates the network and caches relevant data it needs for the backward pass.
-        pub fn forwardPass(self: *Self, input: *const Input) *const Output {
-            const buffer = &self.buffer;
-            inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(Layer.Input);
-                const layer_output = buffer.back(Layer.Output);
-                if (@sizeOf(Layer) > 0) {
-                    layer.forwardPass(layer_input, layer_output);
-                } else {
-                    Layer.forwardPass(layer_input, layer_output);
-                }
-                buffer.flip();
-            }
-            return buffer.front(Output);
-        }
-
-        /// Accumulates the given gradient backwards, layer by layer. Every layer passes its delta,
-        /// the derivative of the loss function with respect to its activations, backwards through the buffer.
-        /// This is called backpropagation.
-        /// The caller is responsible for filling the network's buffer with the delta for the last layer.
-        /// A pointer to the correct memory region is given by lastDeltaBuffer().
-        pub fn backwardPass(self: *Self, gradient: *[parameter_count]f32) void {
-            const buffer = &self.buffer;
-            buffer.flip();
-            comptime var l: usize = Layers.len;
-            inline while (l > 0) {
-                l -= 1;
-                const Layer = Layers[l];
-                const layer = &self.layers[l];
-                const input = buffer.front([Layer.output_dim]f32);
-                const output = buffer.back([Layer.input_dim]f32);
-                const range = parameter_ranges[l];
-                if (@sizeOf(Layer) == 0) {
-                    Layer.backwardPass(input, output);
-                } else if (range.len == 0) {
-                    layer.backwardPass(input, output);
-                } else {
-                    const gradient_slice = gradient[range.from..range.to()];
-                    layer.backwardPass(input, @alignCast(@ptrCast(gradient_slice)), output);
-                }
-                buffer.flip();
-            }
-        }
-
-        /// Returns the correct memory region to put the delta of the last layer before calling backwardPass.
-        pub fn lastDeltaBuffer(self: *Self) *[LastLayer.output_dim]f32 {
-            return self.buffer.back([LastLayer.output_dim]f32);
         }
     };
 }
