@@ -144,5 +144,9 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
                 model.unlock();
             }
         }
+
+        pub fn writeToFile(self: *Self, path: []const u8) !void {
+            try Network.writeToFile(&self.parameters, path);
+        }
     };
 }
