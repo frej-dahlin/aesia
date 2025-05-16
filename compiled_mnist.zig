@@ -6,7 +6,7 @@ const assert = std.debug.assert;
 const skiffer = @import("skiffer.zig");
 
 const dim = 28;
-const Image = [dim * dim]f32;
+const Image = [dim * dim]usize;
 const Label = u8;
 
 fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
@@ -29,10 +29,9 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     assert(row_count == dim);
     assert(col_count == dim);
     const images = try allocator.alloc(Image, image_count);
-    const scale = 1.0 / 255.0;
     for (images) |*image| {
         for (image) |*pixel| {
-            pixel.* = @as(f32, @floatFromInt(try reader.readByte())) * scale;
+            pixel.* = if (try .reader.readByte() > 0) 1 else 0;
         }
     }
     return images;
@@ -58,14 +57,14 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const MultiLogic = skiffer.layer.MultiLogicGate;
-const LogicLayer = skiffer.layer.Logic;
-const GroupSum = skiffer.layer.GroupSum;
+const compiled_layer = @import("compiled_layer.zig");
+const LogicLayer = compiled_layer.Logic;
+const GroupSum = compiled_layer.GroupSum;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
 const width = 8000;
-const Model = skiffer.Model(&.{
+const Network = @import("compiled_network.zig").Network(&.{
     LogicLayer(784, width, .{ .rand = &rand }),
     LogicLayer(width, width, .{ .rand = &rand }),
     LogicLayer(width, width, .{ .rand = &rand }),
@@ -73,52 +72,26 @@ const Model = skiffer.Model(&.{
     LogicLayer(width, width, .{ .rand = &rand }),
     LogicLayer(width, width, .{ .rand = &rand }),
     GroupSum(width, 10),
-}, .{
-    .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.05 }),
 });
 var model: Model = undefined;
 
 pub fn main() !void {
-    model.init();
+    model.compileFromFile("mnist.model");
 
     const allocator = std.heap.page_allocator;
-    const images_training = try loadImages(allocator, "data/train-images-idx3-ubyte.gz");
-    const labels_training = try loadLabels(allocator, "data/train-labels-idx1-ubyte.gz");
     const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
-
-    // Load prior model.
-    // It must have been initialized with seed = 0.
-    // std.debug.print("Loading latest mnist.model...", .{});
-    // const gigabyte = 1_000_000_000;
-    // const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
-    // defer allocator.free(parameter_bytes);
-    // @memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
-    // model.lock();
-    // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
-    // model.unlock();
 
     const training_count = 1_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 10;
-    const batch_size = 32;
-    model.train(
-        .init(images_training[0..training_count], labels_training[0..training_count]),
-        .init(images_validate[0..validate_count], labels_validate[0..validate_count]),
-        epoch_count,
-        batch_size,
-    );
 
-    model.lock();
     var correct_count: usize = 0;
     for (images_validate, labels_validate) |image, label| {
-        const prediction = model.eval(&image);
+        const prediction = network.eval(&image);
         if (std.mem.indexOfMax(f32, prediction) == label) correct_count += 1;
     }
-    model.unlock();
 
     std.debug.print(
         "Correctly classified {d} / {d} ~ {d}%\n",
@@ -130,7 +103,4 @@ pub fn main() !void {
         },
     );
     std.debug.print("Training took: {d}min\n", .{timer.read() / std.time.ns_per_min});
-
-    std.debug.print("Writing model to mnist.model\n", .{});
-    try model.writeToFile("mnist.model");
 }

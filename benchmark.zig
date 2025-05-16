@@ -17,14 +17,20 @@ const ModelOld = skiffer.Model(&.{
     GroupSum(16_000, 10),
 }, .{ .Optimizer = null, .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10) });
 
-const ModelNew = skiffer.Model(&.{
-    PackedLogicLayer(784, 16_000, .{ .rand = &rand }),
-    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
-    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
-    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
-    PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
-    GroupSum(16_000, 10),
-}, .{ .Optimizer = null, .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10) });
+const ModelNew = skiffer.Model(
+    &.{
+        PackedLogicLayer(784, 16_000, .{ .rand = &rand }),
+        PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
+        PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
+        PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
+        PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
+        GroupSum(16_000, 10),
+    },
+    .{
+        .Optimizer = null,
+        .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
+    },
+);
 
 var model_old: ModelOld = undefined;
 var model_new: ModelNew = undefined;

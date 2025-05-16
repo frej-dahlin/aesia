@@ -286,6 +286,7 @@ pub fn Network(Layers: []const type) type {
 
             const allocator = std.heap.page_allocator;
             const bytes = try reader.readAllAlloc(allocator, @sizeOf([parameter_count_no_padding]f32));
+            defer allocator.free(bytes);
             const parameters = std.mem.bytesAsSlice(f32, bytes);
             inline for (layers, parameter_ranges) |*layer, range| {
                 if (range.len > 0) {
