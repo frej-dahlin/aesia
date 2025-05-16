@@ -290,7 +290,7 @@ pub fn Network(Layers: []const type) type {
             inline for (layers, parameter_ranges) |*layer, range| {
                 if (range.len > 0) {
                     const slice = parameters[range.from..range.to()];
-                    layer.compile()
+                    layer.compile(@alignCast(@ptrCast(slice)));
                 }
             }
         }
