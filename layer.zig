@@ -12,6 +12,7 @@ pub const LogicOptions = struct {
 pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
+
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
         pub const Input = [input_dim]f32;
@@ -245,7 +246,30 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
     };
 }
 
-/// A faster and leaner differentiable logic gate.
+/// A faster and leaner differentiable logic gate layer.
+/// A binary logic gate is equivalent to a truth table of the following form:
+///     a[0] a[1] | value
+///     ----------+------
+///      1    1   |  b[0]
+///      1    0   |  b[1]
+///      0    1   |  b[2]
+///      0    0   |  b[3]
+/// Where each b[?] can take the value 1 or 0, there are 2^4 = 16 possible
+/// combinations. In classical differentiable logic gates each logic gate owns
+/// a *joint* probability distribution vector of size 16. It describes the
+/// probability that the differentiable gate is a given specific logic gate.
+/// Packed differentiable logic gates instead take a vector of 4 *independent*
+/// probabilities, each b[?] is the probability that its a 1. To evaluate a
+/// binary logic gate we can use the expression:
+///     ( a[0] &  a[1] & b[0]) v
+///     ( a[0] & !a[1] & b[1]) v
+///     (!a[0] &  a[1] & b[2]) v
+///     (!a[0] & !a[1] & b[2]),
+/// where &, v, and ! means logical and, or, negation, respectively. Furthermore
+/// each or-clause is mutually exclusive. Thus a continuous relaxation of the
+/// above expression is the sum of the relaxation of the or-clauses! This leaves
+/// us with the expression in packed_gate.eval, the gradient and so forth can
+/// easily be derived from there.
 pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
@@ -410,6 +434,7 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
 pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
     return struct {
         const Self = @This();
+
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
         pub const Input = [input_dim]f32;
@@ -450,6 +475,7 @@ pub const MultiLogicOptions = struct {
 pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogicOptions) type {
     return struct {
         const Self = @This();
+
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
         pub const Input = [input_dim]f32;
@@ -613,6 +639,7 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
 pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicOptions) type {
     return struct {
         const Self = @This();
+
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
         pub const Input = [input_dim]f32;
