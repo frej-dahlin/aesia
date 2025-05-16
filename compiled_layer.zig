@@ -26,7 +26,6 @@ const f32x2 = @Vector(2, f32);
 ///     backwardPassLast : backwardPass without passing the delta backwards, see below
 /// Every layer must declare the following methods:
 ///     eval
-
 pub const LogicOptions = struct {
     rand: *std.Random,
 };
@@ -41,45 +40,67 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         const node_count = output_dim;
         const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
         // There are 16 possible logic gates, each one is assigned a probability logit.
-        pub const parameter_count = 16 * node_count;
+        pub const parameter_count: usize = 16 * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
-        pub const parameter_alignment = 64;
+        pub const parameter_alignment: usize = 64;
 
         /// The preprocessed parameters
-        sigma: ?*[node_count]usize align(64),
+        sigma: [node_count]usize align(64),
+        parents: [node_count][2]ParentIndex,
 
         const gate = struct {
             /// Returns the gate applied to a and b
             pub fn eval(a: usize, b: usize, w: usize) usize {
-                return switch(w) {
+                return switch (w) {
                     0 => 0,
-                    1 => a & b,
-                    2 => f: {break :f a-a & b;},
-                    3 => f: {break :f a;},
-                    4 => f: {break :f b-a & b;},
-                    5 => f: {break :f b;},
-                    6 => f: {break :f a + b - 2 * a * b;},
-                    7 => f: {break :f a + b - a * b;},
-                    8 => f: {break :f 1 - (a + b - a * b);},
-                    9 => f: {break :f 1 - (a + b - 2 * a * b);},
-                    10 => f: {break :f 1 - b;},
-                    11 => f: {break :f 1 - (b - a * b);},
-                    12 => f: {break :f 1 - a;},
-                    13 => f: {break :f 1 - (a - a * b);},
-                    14 => f: {break :f 1 - a * b;},
-                    15 => 1,
+                    1 => a * b,
+                    2 => f: {
+                        break :f a - a * b;
+                    },
+                    3 => f: {
+                        break :f a;
+                    },
+                    4 => f: {
+                        break :f b - a * b;
+                    },
+                    5 => f: {
+                        break :f b;
+                    },
+                    6 => f: {
+                        break :f a + b - 2 * a * b;
+                    },
+                    7 => f: {
+                        break :f a + b - a * b;
+                    },
+                    15 => f: {
+                        break :f 1 - (a + b - a * b);
+                    },
+                    14 => f: {
+                        break :f 1 - (a + b - 2 * a * b);
+                    },
+                    13 => f: {
+                        break :f 1 - b;
+                    },
+                    12 => f: {
+                        break :f 1 - (b - a * b);
+                    },
+                    11 => f: {
+                        break :f 1 - a;
+                    },
+                    10 => f: {
+                        break :f 1 - (a - a * b);
+                    },
+                    9 => f: {
+                        break :f 1 - a * b;
+                    },
+                    8 => 1,
                     else => 0,
                 };
             }
         };
         pub fn compile(self: *Self, parameters: *const [node_count][16]f32) void {
-            self.* = .{
-                .sigma = null,
-                .parents = undefined,
-            };
-
             for (0..node_count) |j| {
-                sigma[j] = std.mem.indexOfMax(f32, &parameters[j]);
+                self.sigma[j] = std.mem.indexOfMax(f32, &parameters[j]);
                 self.parents[j] = .{
                     options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
                     options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
@@ -87,30 +108,29 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             }
         }
 
-        pub fn unpack(beta: [4]usize) usize
-        {
-            if(beta[3] == 0)
-                return 8*beta[3]+4*beta[2]+2*beta[1]+beta[0];
+        pub fn unpack(beta: [4]usize) usize {
+            return if (beta[3] == 0)
+                8 * beta[3] + 4 * beta[2] + 2 * beta[1] + beta[0]
             else
-                return 8*beta[3]+4*beta[0]+2*beta[1]+beta[2];
+                8 * beta[3] + 4 * beta[0] + 2 * beta[1] + beta[2];
         }
-        pub fn compilePacked(self: *Self, parameters: *const [node_count][4]f32) void {
-            self.* = .{
-                .sigma = null,
-                .parents = undefined,
-            };
+        // pub fn compilePacked(self: *Self, parameters: *const [node_count][4]f32) void {
+        //     self.* = .{
+        //         .sigma = null,
+        //         .parents = undefined,
+        //     };
 
-            for (0..node_count) |j| {
-                var beta0 = @round(parameters[j][0]);
-                var beta1 = @round(parameters[j][1]);
-                var beta2 = @round(parameters[j][2]);
-                var beta3 = @round(parameters[j][3]);
-                self.parents[j] = .{
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-                };
-            }
-        }
+        //     for (0..node_count) |j| {
+        //         var beta0 = @round(parameters[j][0]);
+        //         var beta1 = @round(parameters[j][1]);
+        //         var beta2 = @round(parameters[j][2]);
+        //         var beta3 = @round(parameters[j][3]);
+        //         self.parents[j] = .{
+        //             options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+        //             options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+        //         };
+        //     }
+        // }
 
         pub fn init(self: *Self, parameters: *[node_count]usize) void {
             self.* = .{
@@ -127,15 +147,14 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
-            for (self.sigma.?, self.parents, output) |sigma, parents, *activation| {
+            for (self.sigma, self.parents, output) |sigma, parents, *activation| {
                 const a = input[parents[0]];
                 const b = input[parents[1]];
-                activation.* = gate.eval(a, b, w);
+                activation.* = gate.eval(a, b, sigma);
             }
         }
     };
 }
-
 
 /// Divides the input into output_dim #buckets, each output is the sequential sum of
 /// input_dim / output_dim items of the input.
@@ -146,16 +165,13 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
         pub const output_dim = output_dim_;
         pub const Input = [input_dim]usize;
         pub const Output = [output_dim]usize;
-        pub const parameter_count = 0;
+        pub const parameter_count: usize = 0;
+        pub const parameter_alignment: usize = 8;
 
         const quot = input_dim / output_dim;
         const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(output_dim)));
 
         field: usize = 1,
-
-        pub fn init(self: *Self) void {
-
-        }
 
         pub fn eval(_: *Self, input: *const Input, output: *Output) void {
             @memset(output, 0);

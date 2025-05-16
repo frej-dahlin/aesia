@@ -31,7 +31,7 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     const images = try allocator.alloc(Image, image_count);
     for (images) |*image| {
         for (image) |*pixel| {
-            pixel.* = if (try .reader.readByte() > 0) 1 else 0;
+            pixel.* = if (try reader.readByte() > 0) 1 else 0;
         }
     }
     return images;
@@ -73,24 +73,21 @@ const Network = @import("compiled_network.zig").Network(&.{
     LogicLayer(width, width, .{ .rand = &rand }),
     GroupSum(width, 10),
 });
-var model: Model = undefined;
+var network: Network = undefined;
 
 pub fn main() !void {
-    model.compileFromFile("mnist.model");
+    try network.compileFromFile("mnist.model");
 
     const allocator = std.heap.page_allocator;
     const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
-
-    const training_count = 1_000;
-    const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
 
     var correct_count: usize = 0;
     for (images_validate, labels_validate) |image, label| {
         const prediction = network.eval(&image);
-        if (std.mem.indexOfMax(f32, prediction) == label) correct_count += 1;
+        if (std.mem.indexOfMax(usize, prediction) == label) correct_count += 1;
     }
 
     std.debug.print(

@@ -274,11 +274,11 @@ pub fn Network(Layers: []const type) type {
 
         const parameter_count_no_padding = blk: {
             var count: usize = 0;
-            inline for (parameter_ranges) |range| count += range.len;
+            for (parameter_ranges) |range| count += range.len;
             break :blk count;
         };
         pub fn compileFromFile(self: *Self, path: []const u8) !void {
-            const file = try std.fs.openFile(path, .{});
+            const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
 
             var buffered = std.io.bufferedReader(file.reader());
@@ -288,7 +288,7 @@ pub fn Network(Layers: []const type) type {
             const bytes = try reader.readAllAlloc(allocator, @sizeOf([parameter_count_no_padding]f32));
             defer allocator.free(bytes);
             const parameters = std.mem.bytesAsSlice(f32, bytes);
-            inline for (layers, parameter_ranges) |*layer, range| {
+            inline for (&self.layers, parameter_ranges) |*layer, range| {
                 if (range.len > 0) {
                     const slice = parameters[range.from..range.to()];
                     layer.compile(@alignCast(@ptrCast(slice)));
