@@ -313,23 +313,6 @@ pub fn Network(Layers: []const type) type {
             }
         }
 
-        /// Borrows parameters, without preprocessing, called by worker threads after the
-        /// main thread has called takeParameters.
-        pub fn borrowParameters(self: *Self, parameters: *[parameter_count]f32) void {
-            inline for (self.layers, parameter_ranges) |*layer, range| {
-                const slice = range.slice(f32, &parameters);
-                if (range.len > 0) layer.borrowParameters(@alignCast(@ptrCast(slice)));
-            }
-        }
-
-        /// Returns parameters, without postprocessing, called by worker threads before the
-        /// main thread calls giveParameters.
-        pub fn returnParameters(self: *Self) void {
-            inline for (self.layers) |*layer| {
-                if (layer.parameter_count > 0) layer.returnParameters();
-            }
-        }
-
         pub fn init(self: *Self, parameters: *[parameter_count]f32) void {
             inline for (Layers, &self.layers, parameter_ranges) |Layer, *layer, range| {
                 if (@sizeOf(Layer) == 0) continue;

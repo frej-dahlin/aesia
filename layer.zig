@@ -228,16 +228,6 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             for (self.sigma.?) |*sigma| sigma.* = softmax2Inverse(sigma.*);
             self.sigma = null;
         }
-
-        pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
-            assert(self.sigma == null);
-            self.sigma = parameters;
-        }
-
-        pub fn returnParameters(self: *Self) void {
-            assert(self.sigma != null);
-            self.sigma = null;
-        }
     };
 }
 
@@ -389,15 +379,6 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
         }
 
         pub fn giveParameters(self: *Self) void {
-            _ = self;
-        }
-
-        pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
-            _ = self;
-            _ = parameters;
-        }
-
-        pub fn returnParameters(self: *Self) void {
             _ = self;
         }
     };
@@ -605,15 +586,6 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
         pub fn giveParameters(self: *Self) void {
             _ = self;
         }
-
-        pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
-            _ = self;
-            _ = parameters;
-        }
-
-        pub fn returnParameters(self: *Self) void {
-            _ = self;
-        }
     };
 }
 
@@ -794,15 +766,6 @@ pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicO
         }
 
         pub fn giveParameters(self: *Self) void {
-            _ = self;
-        }
-
-        pub fn borrowParameters(self: *Self, parameters: *[node_count]f32x16) void {
-            _ = self;
-            _ = parameters;
-        }
-
-        pub fn returnParameters(self: *Self) void {
             _ = self;
         }
     };
