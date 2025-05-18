@@ -1,7 +1,7 @@
 pub const std = @import("std");
 const assert = std.debug.assert;
 
-pub const skiffer = @import("skiffer.zig");
+pub const aesia = @import("aesia.zig");
 
 pub const ModelOptions = struct {
     Optimizer: ?fn (usize) type,
@@ -17,7 +17,7 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
     return struct {
         const Self = @This();
 
-        const Network = skiffer.Network(Layers);
+        const Network = aesia.Network(Layers);
         pub const parameter_count = Network.parameter_count;
         const vector_len = std.simd.suggestVectorLength(f32) orelse 1;
         comptime {
@@ -29,8 +29,8 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
         pub const Prediction = Network.Output;
         pub const input_dim = Network.input_dim;
         pub const output_dim = Network.output_dim;
-        pub const Optimizer = (if (options.Optimizer) |O| O else skiffer.optimizer.Adam(.default))(parameter_count);
-        pub const Loss = if (options.Loss) |L| L else skiffer.loss.HalvedMeanSquareError(output_dim);
+        pub const Optimizer = (if (options.Optimizer) |O| O else aesia.optimizer.Adam(.default))(parameter_count);
+        pub const Loss = if (options.Loss) |L| L else aesia.loss.HalvedMeanSquareError(output_dim);
         pub const Label = Loss.Label;
 
         pub const Dataset = struct {

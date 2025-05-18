@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
-const skiffer = @import("skiffer.zig");
+const aesia = @import("aesia.zig");
 
 const dim = 28;
 const Image = [dim * dim]f32;
@@ -58,24 +58,20 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const MultiLogic = skiffer.layer.MultiLogicGate;
-const LogicLayer = skiffer.layer.Logic;
-const GroupSum = skiffer.layer.GroupSum;
+const MultiLogic = aesia.layer.MultiLogicGate;
+const LogicLayer = aesia.layer.PackedLogic;
+const GroupSum = aesia.layer.GroupSum;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
-const width = 8000;
-const Model = skiffer.Model(&.{
+const width = 24000;
+const Model = aesia.Model(&.{
     LogicLayer(784, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
     LogicLayer(width, width, .{ .rand = &rand }),
     GroupSum(width, 10),
 }, .{
-    .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = skiffer.optimizer.Adam(.{ .learn_rate = 0.05 }),
+    .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
+    .Optimizer = aesia.optimizer.Adam(.{ .learn_rate = 0.05 }),
 });
 var model: Model = undefined;
 
@@ -99,11 +95,11 @@ pub fn main() !void {
     // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
     // model.unlock();
 
-    const training_count = 1_000;
+    const training_count = 60_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 10;
+    const epoch_count = 40;
     const batch_size = 32;
     model.train(
         .init(images_training[0..training_count], labels_training[0..training_count]),

@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
-const skiffer = @import("skiffer.zig");
+const aesia = @import("aesia.zig");
 
 const dim = 28;
 const Image = [dim * dim]usize;
@@ -99,5 +99,5 @@ pub fn main() !void {
                 @as(f32, @floatFromInt(images_validate.len)),
         },
     );
-    std.debug.print("Training took: {d}min\n", .{timer.read() / std.time.ns_per_min});
+    std.debug.print("Training took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 }

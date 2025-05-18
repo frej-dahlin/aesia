@@ -1,23 +1,23 @@
 const std = @import("std");
 
-const skiffer = @import("skiffer.zig");
-const LogicLayer = skiffer.layer.Logic;
-const PackedLogicLayer = skiffer.layer.PackedLogic;
-const GroupSum = skiffer.layer.GroupSum;
+const aesia = @import("aesia.zig");
+const LogicLayer = aesia.layer.Logic;
+const PackedLogicLayer = aesia.layer.PackedLogic;
+const GroupSum = aesia.layer.GroupSum;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
 
-const ModelOld = skiffer.Model(&.{
+const ModelOld = aesia.Model(&.{
     LogicLayer(784, 16_000, .{ .rand = &rand }),
     LogicLayer(16_000, 16_000, .{ .rand = &rand }),
     LogicLayer(16_000, 16_000, .{ .rand = &rand }),
     LogicLayer(16_000, 16_000, .{ .rand = &rand }),
     LogicLayer(16_000, 16_000, .{ .rand = &rand }),
     GroupSum(16_000, 10),
-}, .{ .Optimizer = null, .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10) });
+}, .{ .Optimizer = null, .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10) });
 
-const ModelNew = skiffer.Model(
+const ModelNew = aesia.Model(
     &.{
         PackedLogicLayer(784, 16_000, .{ .rand = &rand }),
         PackedLogicLayer(16_000, 16_000, .{ .rand = &rand }),
@@ -28,7 +28,7 @@ const ModelNew = skiffer.Model(
     },
     .{
         .Optimizer = null,
-        .Loss = skiffer.loss.DiscreteCrossEntropy(u8, 10),
+        .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
     },
 );
 
