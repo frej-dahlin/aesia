@@ -16,21 +16,23 @@ const Range = struct {
     }
 };
 
-/// A read-write double buffer consists of two equally sized memory regions: a front and back.
-/// The intention of this data structure is to statically allocate transient memory regions for functions
-/// to be passed input in the front half and pass output to the back half.
-/// One acquires a pointer to each respective regions with the front(T) and back(t) commands,
-/// where T is the type to case the pointer to the memory region to. The front is read only,
-/// i.e. front(T) has return type "*const T" and back(T) returns a pointer to variable memory.
-/// After the back of the buffer is filled one calls flip() to switch the two memory regions. Note that
-/// no memory is moved and one can safely read from the front until the next flip() call.
+/// A read-write double buffer consists of two equally sized memory regions:
+/// a front and back. The intention of this data structure is to statically
+/// allocate transient memory regions for functions to be passed input in the
+/// front half and pass output to the back half. One acquires a pointer to each
+/// respective regions with the front(T) and back(t) commands, where T is the
+/// type to case the pointer to the memory region to. The front is read only,
+/// i.e. front(T) has return type "*const T" and back(T) returns a pointer to
+/// variable memory. After the back of the buffer is filled one calls flip()
+/// to switch the two memory regions. Note that no memory is moved and one can
+/// safely read from the front until the next flip() call.
 pub fn DoubleBuffer(size: usize, alignment: usize) type {
     if (alignment == 0) @compileError("DoubleBuffer: invalid alignment equal to 0.");
     return struct {
         const Self = @This();
 
-        // Ensure that the back half has the same alignment, this is guaranteed if the actual size is divisible
-        // by the alignment.
+        // Ensure that the back half has the same alignment, this is guaranteed
+        // if the actual size is divisible by the alignment.
         const actual_size = blk: {
             if (alignment >= size) break :blk alignment;
             const padding = (size - alignment) % alignment;
@@ -68,37 +70,15 @@ pub fn DoubleBuffer(size: usize, alignment: usize) type {
     };
 }
 
-/// A feedforward network of compile time known layer types.
-/// A layer is a type interface, it needs to declare:
-///     Input      : input type
-///     Output     : output type
-///     input_dim  : the dimension of the input
-///     output_dim : the dimension of the output
-/// Every layer must declare the following methods:
-///     eval
-///     forwardPass
-///     backwardPass
-/// Optionally, the layer can make use of parameters, which have to be of type f32.
-/// To utilize parameters, the following must be declared:
-///     parameter_count : the number of f32 parameters the layer will be allocated
-///     parameter_alignment : the alignment of the layer's parameters
-/// as well as the methods:
-///     takeParameters   : take ownership of the parameters, preprocessing them, if necessary
-///     giveParameters   : give back ownership of the parameters, postprocessing them, if necessary
-///     borrowParameters : store the pointer to the parameters, this is called by worker threads after
-///                        the main thread has called takeParameters
-///     returnParameters : release the pointer to the paramters, this is called by worked threads after
-///                        the main thread has called giveParameters
-///     backwardPassLast : backwardPass without passing the delta backwards, see below
 const Tag = enum {
-    stateless,
+    namespace,
     statefull,
     trainable,
 };
 
-fn tag(comptime Layer: type) Tag {
+fn tag(Layer: type) Tag {
     if (@sizeOf(Layer) == 0) {
-        return .stateless;
+        return .namespace;
     } else if (!@hasDecl(Layer, "parameter_count")) {
         return .statefull;
     } else {
@@ -110,79 +90,133 @@ fn printCompileError(comptime fmt: []const u8, args: anytype) void {
     @compileError(std.fmt.comptimePrint(fmt, args));
 }
 
-const ConstrainedDeclaration = struct {
-    name: []const u8,
-    constraints: []fn ([]const u8, anytype) void,
+const DeclarationConstraint = enum {
+    isConst,
+    isPositiveInt,
 };
 
-fn isConst(prefix: []const u8, field_ptr: anytype) void {
-    if (!@typeInfo(field_ptr).pointer.is_const) @compileError(prefix ++ " must be const");
-}
-
-const Decl = struct {
-    name: []const u8,
-    T: ?type,
-};
-
-fn requireDecl(Struct: type, decl: Decl, prefix: []const u8) void {
-    if (!@hasDecl(Struct, decl.name)) printCompileError(
-        "{s} '{s}' needs to declare '{s}'",
-        .{ prefix, @typeName(Struct), decl.name },
-    );
-    if (decl.T != null and @TypeOf(@field(Struct, decl.name)) != decl.T.?) printCompileError(
-        "{s} '{s}' must declare '{s}' to be of type '{s}'.",
-        .{ prefix, @typeName(Struct), decl.name, @typeName(decl.T.?) },
+fn mustNotDeclare(T: type, decl_name: []const u8, message_prefix: []const u8) void {
+    if (@hasDecl(T, decl_name)) printCompileError(
+        "{s} {s} must not declare '{s}'",
+        .{ message_prefix, @typeName(T), decl_name },
     );
 }
 
-fn requireNotDecl(Struct: type, decl: Decl, prefix: []const u8) void {
-    if (@hasDecl(Struct, decl.name)) printCompileError(
-        "{s} '{s}' is not allowed to declare '{s}'",
-        .{ prefix, @typeName(Struct), decl.name },
-    );
+fn mustDeclareAs(
+    decl_name: []const u8,
+    constraints: []const DeclarationConstraint,
+    message_prefix: []const u8,
+) fn (type) void {
+    return struct {
+        pub fn constrain(T: type) void {
+            const type_name = @typeName(T);
+
+            if (!@hasDecl(T, decl_name)) printCompileError(
+                "{s} {s} must declare '{s}'",
+                .{ message_prefix, type_name, decl_name },
+            );
+
+            for (constraints) |constraint| switch (constraint) {
+                .isConst => {
+                    const decl_ptr = &@field(T, decl_name);
+                    if (!@typeInfo(@TypeOf(decl_ptr)).pointer.is_const) printCompileError(
+                        "{s} {s} must declare '{s}' as const",
+                        .{ message_prefix, type_name, decl_name },
+                    );
+                },
+                .isPositiveInt => {
+                    const decl_value = @field(T, decl_name);
+                    const decl_type = @TypeOf(decl_value);
+                    const info = @typeInfo(decl_type);
+                    const condition = (decl_type == comptime_int or info == .int) and
+                        decl_value > 0;
+                    if (!condition) printCompileError(
+                        "{s} {s} must declare '{s}' as a positive integer",
+                        .{ message_prefix, type_name, decl_name },
+                    );
+                },
+            };
+        }
+    }.constrain;
 }
 
 /// Compile time checks for the layer interface.
 fn check(Layer: type) void {
-    const required_decls = [_]Decl{
-        .{ .name = "input_dim", .T = usize },
-        .{ .name = "output_dim", .T = usize },
-        .{ .name = "Input", .T = null },
-        .{ .name = "Output", .T = null },
-    };
-    const trainable_decls = [_]Decl{
-        .{ .name = "parameter_count", .T = usize },
-        .{ .name = "parameter_alignment", .T = usize },
-    };
-    inline for (required_decls) |decl| requireDecl(Layer, decl, "layer");
+    const typeCheck = *const fn (type) void;
+    const message_prefix = "Aesia layer:";
+    inline for ([_]typeCheck{
+        mustDeclareAs("ItemIn", &.{.isConst}, message_prefix),
+        mustDeclareAs("ItemOut", &.{.isConst}, message_prefix),
+        mustDeclareAs("dim_in", &.{ .isConst, .isPositiveInt }, message_prefix),
+        mustDeclareAs("dim_out", &.{ .isConst, .isPositiveInt }, message_prefix),
+    }) |constrain| constrain(Layer);
+
     switch (tag(Layer)) {
-        .stateless => {
-            inline for (trainable_decls) |decl| requireNotDecl(Layer, decl, "stateless layer");
-        },
-        .statefull => {
-            inline for (trainable_decls) |decl| requireNotDecl(Layer, decl, "statefull layer");
-        },
+        .namespace => {},
+        .statefull => {},
         .trainable => {
-            inline for (trainable_decls) |decl| requireDecl(Layer, decl, "statefull layer");
+            const trainable_prefix = "Aesia trainable layer:";
+            inline for ([_]typeCheck{
+                mustDeclareAs(
+                    "parameter_count",
+                    &.{ .isConst, .isPositiveInt },
+                    trainable_prefix,
+                ),
+                mustDeclareAs(
+                    "parameter_alignment",
+                    &.{ .isConst, .isPositiveInt },
+                    trainable_prefix,
+                ),
+            }) |constrain| constrain(Layer);
         },
     }
 }
 
+/// A feedforward network of compile time known layer types.
+/// A layer is a type interface, it needs to declare:
+///     ItemIn  : type of input array items,
+///     ItemOut : type of output array items,
+///     dim_out : length of input array,
+///     dim_in  : length of output array.
+/// Optionally a layer may declare
+///     parameter_count : a positive integer declaring how many trainable parameter the layer has.
+/// Layer's are separated into three distinct tags specified by the conditions:
+///     trainable : declares parameter_count,
+///     statefull : does not declare parameter_count and @sizeOf(Layer) > 0,
+///     namespace : @sizeOf(Layer) == 0.
+/// For efficient SIMD utilization trainable layers need to declare
+///     parameter_alignment : alignment of its given parameter array.
+/// They also need to declare the methods
+///     takeParameters(*@This(), *[parameter_count]f32),
+///     giveParameters(*This()),
+/// which takes/gives parameters pre/postprocessing them if necessary.
+/// Every layer needs to declare the following methods with signatures:
+///     eval([*@This()], *const [DimIn]ItemIn, *[DimOut]ItemOut) void,
+///     forwardPass([*@This()], *const [DimIn]ItemIn, *[DimOut]ItemOut) void,
+///     backwardPass([*@This()], *const [DimOut]f32, *[DimIn]f32, [*[parameter_count]f32]) void,
+/// where *@This() is only passed for non namespace layers and only trainable layers act on the
+/// gradient of its parameters in backwardPass.
 pub fn Network(Layers: []const type) type {
-    inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
-        if (prev.Output != next.Input) @compileError("Layers " ++ @typeName(prev) ++ " and " ++
-            @typeName(next) ++ " have non matching input & output types.");
-    }
     inline for (Layers) |Layer| check(Layer);
+    inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
+        if (prev.ItemOut != next.ItemIn) printCompileError(
+            "layers {s} and {s} have mismatched input/output item types",
+            .{ @typeName(prev), @typeName(next) },
+        );
+        if (prev.dim_out != next.dim_in) printCompileError(
+            "layers {s} and {s} have mismatched input/output dimension",
+            .{ @typeName(prev), @typeName(next) },
+        );
+    }
+
     return struct {
         const Self = @This();
 
-        // Fixme: Compile time sanity check the Layers.
-
-        // The following parameter computations are necessary if the layer uses SIMD vectors.
-        // For example @Vector(16, f32) has a natural alignment of 64 *not* 4. So if one layer
-        // uses 13 parameters and the next relies on SIMD computations, then the alignment is screwed up.
-        // We simply pad the parameters inbetween with some extra unused parameters.
+        // The following parameter computations are necessary if the layer uses
+        // SIMD vectors. For example @Vector(16, f32) has a natural alignment
+        // of 64 *not* 4. So if one layer uses 13 parameters and the next relies
+        // on SIMD computations, then the alignment is screwed up. We simply pad
+        // the parameters inbetween with some extra unused parameters.
         pub const parameter_alignment = blk: {
             var max: usize = 0;
             for (Layers) |Layer| {
@@ -194,7 +228,8 @@ pub fn Network(Layers: []const type) type {
             var offset: usize = 0;
             var ranges: [Layers.len]Range = undefined;
             for (&ranges, Layers) |*range, Layer| {
-                // We branch here so that parameterless layers do not need to declare all parameter info.
+                // We branch here so that parameterless layers do not need to
+                // declare all parameter info.
                 if (tag(Layer) != .trainable) {
                     range.* = Range{ .from = offset, .len = 0 };
                 } else {
@@ -219,23 +254,29 @@ pub fn Network(Layers: []const type) type {
             break :blk len;
         };
 
-        pub const LastLayer = Layers[Layers.len - 1];
-        pub const FirstLayer = Layers[0];
-        pub const input_dim = FirstLayer.input_dim;
-        pub const output_dim = LastLayer.output_dim;
-        pub const Input = FirstLayer.Input;
-        pub const Output = LastLayer.Output;
+        pub const LayerLast = Layers[Layers.len - 1];
+        pub const LayerFirst = Layers[0];
+        pub const dim_in = LayerFirst.dim_in;
+        pub const dim_out = LayerLast.dim_out;
+        pub const ItemIn = LayerFirst.ItemIn;
+        pub const ItemOut = LayerLast.ItemOut;
+
+        pub const Input = [dim_in]ItemIn;
+        pub const Output = [dim_out]ItemOut;
 
         const buffer_alignment = blk: {
             var max: usize = 0;
-            for (Layers) |Layer| max = @max(max, @alignOf(Layer.Output));
+            for (Layers) |Layer| max = @max(max, @alignOf(LayerOutput(Layer)));
             break :blk max;
         };
         const buffer_size = blk: {
             var max: usize = 0;
-            // Fixme: @sizeOf(Layer.Input) is only required because we do not have a
+            // Fixme: @sizeOf(LayerInput(Layer)) is only required because we do not have a
             // backwardPassFinal function.
-            for (Layers) |Layer| max = @max(max, @max(@sizeOf(Layer.Input), @sizeOf(Layer.Output)));
+            for (Layers) |Layer| max = @max(max, @max(
+                @sizeOf(LayerInput(Layer)),
+                @sizeOf(LayerOutput(Layer)),
+            ));
             break :blk max;
         };
 
@@ -245,16 +286,12 @@ pub fn Network(Layers: []const type) type {
         /// layer's computation and pass it to the next. A double buffer facilitates this.
         buffer: DoubleBuffer(buffer_size, buffer_alignment),
 
-        pub const default = Self{
-            .layers = blk: {
-                var result: std.meta.Tuple(Layers) = undefined;
-                for (Layers, &result) |Layer, *entry| {
-                    if (@sizeOf(Layer) > 0) entry.* = Layer.default;
-                }
-                break :blk result;
-            },
-            .buffer = .default,
-        };
+        fn LayerInput(Layer: type) type {
+            return [Layer.dim_in]Layer.ItemIn;
+        }
+        fn LayerOutput(Layer: type) type {
+            return [Layer.dim_out]Layer.ItemOut;
+        }
 
         pub fn writeToFile(parameters: *[parameter_count]f32, path: []const u8) !void {
             const file = try std.fs.cwd().createFile(path, .{});
@@ -274,12 +311,12 @@ pub fn Network(Layers: []const type) type {
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
             inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(Layer.Input);
-                const layer_output = buffer.back(Layer.Output);
-                if (@sizeOf(Layer) > 0) {
-                    layer.eval(layer_input, layer_output);
-                } else {
+                const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
+                const layer_output = buffer.back(LayerOutput(Layer));
+                if (comptime tag(Layer) == .namespace) {
                     Layer.eval(layer_input, layer_output);
+                } else {
+                    layer.eval(layer_input, layer_output);
                 }
                 buffer.flip();
             }
@@ -317,7 +354,9 @@ pub fn Network(Layers: []const type) type {
             inline for (Layers, &self.layers, parameter_ranges) |Layer, *layer, range| {
                 if (@sizeOf(Layer) == 0) continue;
                 if (range.len > 0) {
-                    const slice: *[range.len]f32 = @alignCast(@ptrCast(parameters[range.from..range.to()]));
+                    const slice: *[range.len]f32 = @alignCast(
+                        @ptrCast(parameters[range.from..range.to()]),
+                    );
                     layer.init(slice);
                 } else {
                     layer.init();
@@ -329,8 +368,8 @@ pub fn Network(Layers: []const type) type {
         pub fn forwardPass(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
             inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(Layer.Input);
-                const layer_output = buffer.back(Layer.Output);
+                const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
+                const layer_output = buffer.back(LayerOutput(Layer));
                 if (@sizeOf(Layer) > 0) {
                     layer.forwardPass(layer_input, layer_output);
                 } else {
@@ -341,11 +380,12 @@ pub fn Network(Layers: []const type) type {
             return buffer.front(Output);
         }
 
-        /// Accumulates the given gradient backwards, layer by layer. Every layer passes its delta,
-        /// the derivative of the loss function with respect to its activations, backwards through the buffer.
-        /// This is called backpropagation.
-        /// The caller is responsible for filling the network's buffer with the delta for the last layer.
-        /// A pointer to the correct memory region is given by lastDeltaBuffer().
+        /// Accumulates the given gradient backwards, layer by layer. Every
+        /// layer passes its delta, the derivative of the loss function with
+        /// respect to its activations, backwards through the buffer. This is
+        /// called backpropagation. The caller is responsible for filling the
+        /// network's buffer with the delta for the last layer. A pointer to the
+        /// correct memory region is given by lastDeltaBuffer().
         pub fn backwardPass(self: *Self, gradient: *[parameter_count]f32) void {
             const buffer = &self.buffer;
             buffer.flip();
@@ -354,8 +394,8 @@ pub fn Network(Layers: []const type) type {
                 l -= 1;
                 const Layer = Layers[l];
                 const layer = &self.layers[l];
-                const input = buffer.front([Layer.output_dim]f32);
-                const output = buffer.back([Layer.input_dim]f32);
+                const input = buffer.front([Layer.dim_out]f32);
+                const output = buffer.back([Layer.dim_in]f32);
                 const range = parameter_ranges[l];
                 if (@sizeOf(Layer) == 0) {
                     Layer.backwardPass(input, output);
@@ -369,9 +409,10 @@ pub fn Network(Layers: []const type) type {
             }
         }
 
-        /// Returns the correct memory region to put the delta of the last layer before calling backwardPass.
-        pub fn lastDeltaBuffer(self: *Self) *[LastLayer.output_dim]f32 {
-            return self.buffer.back([LastLayer.output_dim]f32);
+        /// Returns the correct memory region to put the delta of the last layer
+        /// before calling backwardPass.
+        pub fn lastDeltaBuffer(self: *Self) *[dim_out]f32 {
+            return self.buffer.back([dim_out]f32);
         }
     };
 }

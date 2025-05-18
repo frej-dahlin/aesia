@@ -435,6 +435,11 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
     return struct {
         const Self = @This();
 
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = input_dim_;
+        pub const dim_out = output_dim_;
+
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
         pub const Input = [input_dim]f32;
@@ -476,16 +481,20 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
     return struct {
         const Self = @This();
 
-        pub const input_dim = input_dim_;
-        pub const output_dim = output_dim_;
-        pub const Input = [input_dim]f32;
-        pub const Output = [output_dim]f32;
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = input_dim_;
+        pub const dim_out = output_dim_;
+
+        const Input = [dim_in]f32;
+        const Output = [dim_out]f32;
+
         pub const parameter_count = parameter_vector_len * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
         pub const parameter_alignment: usize = @max(64, @alignOf(ParameterVector));
 
-        const node_count = output_dim;
-        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
+        const node_count = dim_out;
+        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
         const arity = options.arity;
         const parameter_vector_len = 1 << arity;
         const ParameterVector = @Vector(parameter_vector_len, f32);
@@ -547,7 +556,7 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
 
         gates: [node_count]Gate align(parameter_alignment),
         inputs: [node_count][arity]f32,
-        parents: [node_count][arity]std.math.IntFittingRange(0, input_dim - 1),
+        parents: [node_count][arity]std.math.IntFittingRange(0, dim_in - 1),
         max_index: [node_count]ArgumentIndex,
 
         fn logistic(x: ParameterVector) ParameterVector {
@@ -563,7 +572,7 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
             self.* = undefined;
             for (0..node_count) |j| {
                 inline for (&self.parents[j]) |*parent| {
-                    parent.* = options.rand.intRangeLessThan(ParentIndex, 0, input_dim);
+                    parent.* = options.rand.intRangeLessThan(ParentIndex, 0, dim_in);
                 }
             }
         }
@@ -608,9 +617,9 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
         ///  applicable for the first layer in a network only.
         pub fn backwardPass(
             noalias self: *Self,
-            noalias input: *const [output_dim]f32,
+            noalias input: *const [dim_out]f32,
             noalias cost_gradient: *[node_count]ParameterVector,
-            noalias output: *[input_dim]f32,
+            noalias output: *[dim_in]f32,
         ) void {
             @setFloatMode(.optimized);
             @memset(output, 0);
@@ -819,3 +828,21 @@ pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicO
         }
     };
 }
+
+// pub fn ConvolutionLogic(depth: usize, height: usize, width: usize) type {
+//     return struct {
+//         const Self = @This();
+
+//         pub const InputElement = f32;
+//         pub const OutputElement = f32;
+//         pub const input_dim = depth * height * width;
+//         pub const output_dim = depth * height * width;
+//         pub const parameter_count = 1 << 9;
+
+//         pub fn eval(
+//             self: *const Self,
+//             input: *const [depth][height][width]f32,
+//             output: *[depth][height][width]f32,
+//         ) void {}
+//     };
+// }
