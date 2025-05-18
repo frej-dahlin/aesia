@@ -9,20 +9,21 @@ pub const LogicOptions = struct {
     rand: *std.Random,
 };
 
-pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
+pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
 
-        pub const input_dim = input_dim_;
-        pub const output_dim = output_dim_;
-        pub const Input = [input_dim]f32;
-        pub const Output = [output_dim]f32;
-        const node_count = output_dim;
-        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
         // There are 16 possible logic gates, each one is assigned a probability logit.
         pub const parameter_count = 16 * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
         pub const parameter_alignment: usize = 64;
+
+        const node_count = dim_out;
+        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
 
         gradient: [node_count]f32x16 align(64),
         diff: [node_count][2]f32 align(64),
@@ -122,8 +123,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             };
             for (0..node_count) |j| {
                 self.parents[j] = .{
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
                 };
             }
         }
@@ -151,8 +152,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         /// takeParameters.
         pub fn eval(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             assert(self.sigma != null);
@@ -168,8 +169,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         /// via takeParameters.
         pub fn forwardPass(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             assert(self.sigma != null);
@@ -213,9 +214,9 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         /// previous layer. Assert that the layer has been given parameters via takeParameters.
         pub fn backwardPass(
             noalias self: *Self,
-            noalias input: *const [output_dim]f32,
+            noalias input: *const [dim_out]f32,
             noalias cost_gradient: *[node_count]f32x16,
-            noalias output: *[input_dim]f32,
+            noalias output: *[dim_in]f32,
         ) void {
             @setFloatMode(.optimized);
             @memset(output, 0);
@@ -270,22 +271,22 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
 /// above expression is the sum of the relaxation of the or-clauses! This leaves
 /// us with the expression in packed_gate.eval, the gradient and so forth can
 /// easily be derived from there.
-pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
+pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
 
-        pub const input_dim = input_dim_;
-        pub const output_dim = output_dim_;
-        pub const Input = [input_dim]f32;
-        pub const Output = [output_dim]f32;
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
         // There are 16 possible logic gates, we use a novel packed representation
         // that packs these into 4 parameters.
         pub const parameter_count = 4 * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
         pub const parameter_alignment: usize = 64;
 
-        const node_count = output_dim;
-        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
+        const node_count = dim_out;
+        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
 
         // Note: Do not try to be clever with SIMD operations, the compiler does a great
         // job with the following functions.
@@ -354,8 +355,8 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
             self.* = undefined;
             for (0..node_count) |j| {
                 self.parents[j] = .{
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
                 };
             }
         }
@@ -363,8 +364,8 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
         /// Evaluates the layer.
         pub fn eval(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             for (self.beta, output, 0..) |beta, *activation, j| {
@@ -377,8 +378,8 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
         /// Evaluates the layer and caches the arguments to each gate to be used in backwardPass.
         pub fn forwardPass(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             // For some reason it is faster to to a simple loop rather than a multi item one.
@@ -401,9 +402,9 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
         /// activations.
         pub fn backwardPass(
             noalias self: *Self,
-            noalias input: *const [output_dim]f32,
+            noalias input: *const [dim_out]f32,
             noalias cost_gradient: *[node_count]f32x4,
-            noalias output: *[input_dim]f32,
+            noalias output: *[dim_in]f32,
         ) void {
             @setFloatMode(.optimized);
             @memset(output, 0);
@@ -429,26 +430,21 @@ pub fn PackedLogic(input_dim_: usize, output_dim_: usize, options: LogicOptions)
     };
 }
 
-/// Divides the input into output_dim buckets, each output is the sequential sum of
-/// input_dim / output_dim items of the input.
-pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
+/// Divides the input into dim_out buckets, each output is the sequential sum of
+/// dim_in / dim_out items of the input.
+pub fn GroupSum(dim_in_: usize, dim_out_: usize) type {
     return struct {
         const Self = @This();
 
         pub const ItemIn = f32;
         pub const ItemOut = f32;
-        pub const dim_in = input_dim_;
-        pub const dim_out = output_dim_;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
 
-        pub const input_dim = input_dim_;
-        pub const output_dim = output_dim_;
-        pub const Input = [input_dim]f32;
-        pub const Output = [output_dim]f32;
+        const quot = dim_in / dim_out;
+        const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(dim_out)));
 
-        const quot = input_dim / output_dim;
-        const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(output_dim)));
-
-        pub fn eval(input: *const Input, output: *Output) void {
+        pub fn eval(input: *const [dim_in]ItemIn, output: *[dim_out]ItemOut) void {
             @memset(output, 0);
             for (output, 0..) |*coord, k| {
                 const from = k * quot;
@@ -458,11 +454,11 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
             }
         }
 
-        pub fn forwardPass(input: *const Input, output: *Output) void {
+        pub fn forwardPass(input: *const [dim_in]ItemIn, output: *[dim_out]ItemOut) void {
             return eval(input, output);
         }
 
-        pub fn backwardPass(input: *const [output_dim]f32, output: *[input_dim]f32) void {
+        pub fn backwardPass(input: *const [dim_out]f32, output: *[dim_in]f32) void {
             for (input, 0..) |child, k| {
                 const from = k * quot;
                 const to = from + quot;
@@ -477,17 +473,14 @@ pub const MultiLogicOptions = struct {
     rand: *std.Random,
 };
 
-pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogicOptions) type {
+pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOptions) type {
     return struct {
         const Self = @This();
 
         pub const ItemIn = f32;
         pub const ItemOut = f32;
-        pub const dim_in = input_dim_;
-        pub const dim_out = output_dim_;
-
-        const Input = [dim_in]f32;
-        const Output = [dim_out]f32;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
 
         pub const parameter_count = parameter_vector_len * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
@@ -579,8 +572,8 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
 
         pub fn eval(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             for (0..node_count) |j| {
@@ -595,8 +588,8 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
 
         pub fn forwardPass(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             // For some reason it is faster to to a simple loop rather than a multi item one.
@@ -645,21 +638,21 @@ pub fn MultiLogicGate(input_dim_: usize, output_dim_: usize, options: MultiLogic
     };
 }
 
-pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicOptions) type {
+pub fn MultiLogicMax(dim_in_: usize, dim_out_: usize, options: MultiLogicOptions) type {
     return struct {
         const Self = @This();
 
-        pub const input_dim = input_dim_;
-        pub const output_dim = output_dim_;
-        pub const Input = [input_dim]f32;
-        pub const Output = [output_dim]f32;
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
 
-        const node_count = output_dim;
+        const node_count = dim_out;
         const arity = options.arity;
         const vector_len = 1 << arity;
         const Vector = @Vector(vector_len, f32);
         const ParameterIndex = std.math.IntFittingRange(0, vector_len - 1);
-        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
+        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
 
         pub const parameter_count = vector_len * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
@@ -735,7 +728,7 @@ pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicO
 
         gates: [node_count]Gate align(parameter_alignment),
         inputs: [node_count][arity]f32,
-        parents: [node_count][arity]std.math.IntFittingRange(0, input_dim - 1),
+        parents: [node_count][arity]std.math.IntFittingRange(0, dim_in - 1),
         max_index: [node_count]ArgumentIndex,
 
         fn logistic(x: Vector) Vector {
@@ -751,15 +744,15 @@ pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicO
             self.* = undefined;
             for (0..node_count) |j| {
                 inline for (&self.parents[j]) |*parent| {
-                    parent.* = options.rand.intRangeLessThan(ParentIndex, 0, input_dim);
+                    parent.* = options.rand.intRangeLessThan(ParentIndex, 0, dim_in);
                 }
             }
         }
 
         pub fn eval(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             for (0..node_count) |j| {
@@ -775,8 +768,8 @@ pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicO
 
         pub fn forwardPass(
             noalias self: *Self,
-            noalias input: *const Input,
-            noalias output: *Output,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
         ) void {
             @setFloatMode(.optimized);
             // For some reason it is faster to to a simple loop rather than a multi item one.
@@ -799,9 +792,9 @@ pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicO
         ///  applicable for the first layer in a network only.
         pub fn backwardPass(
             noalias self: *Self,
-            noalias input: *const [output_dim]f32,
+            noalias input: *const [dim_out]f32,
             noalias cost_gradient: *[node_count]Vector,
-            noalias output: *[input_dim]f32,
+            noalias output: *[dim_in]f32,
         ) void {
             @setFloatMode(.optimized);
             @memset(output, 0);
@@ -835,8 +828,8 @@ pub fn MultiLogicMax(input_dim_: usize, output_dim_: usize, options: MultiLogicO
 
 //         pub const InputElement = f32;
 //         pub const OutputElement = f32;
-//         pub const input_dim = depth * height * width;
-//         pub const output_dim = depth * height * width;
+//         pub const dim_in = depth * height * width;
+//         pub const dim_out = depth * height * width;
 //         pub const parameter_count = 1 << 9;
 
 //         pub fn eval(
