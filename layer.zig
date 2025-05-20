@@ -468,6 +468,176 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize) type {
     };
 }
 
+pub fn ConvolutionLogic(height: usize, width: usize) type {
+    return struct {
+        const Self = @This();
+
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = height * width;
+        pub const dim_out = height * width;
+        pub const parameter_count = 1 << 9;
+        const ParameterVector = @Vector(parameter_count, f32);
+        pub const parameter_alignment = @alignOf(ParameterVector);
+
+        var input_buffer: [height + 2][width + 2]f32 = undefined;
+        var delta_buffer: [height + 2][width + 2]f32 = undefined;
+
+        kernel: MultiGate(9),
+        receptive_fields: [height][width][9]f32,
+
+        const Point = @Vector(2, usize);
+        const receptive_offsets = [9]Point{
+            .{ 0, 0 },
+            .{ 0, 1 },
+            .{ 0, 2 },
+            .{ 1, 0 },
+            .{ 1, 1 },
+            .{ 1, 2 },
+            .{ 2, 0 },
+            .{ 2, 1 },
+            .{ 2, 2 },
+        };
+
+        fn inBounds(point: Point) bool {
+            return 0 < point[0] and point[0] < height and
+                0 < point[1] and point[1] < width;
+        }
+
+        pub fn eval(
+            self: *Self,
+            input: *const [height][width]f32,
+            output: *[height][width]f32,
+        ) void {
+            input_buffer = @splat(@splat(0));
+            for (input_buffer[1 .. input_buffer.len - 1], input) |*buffer_row, row| {
+                @memcpy(buffer_row[1 .. buffer_row.len - 1], &row);
+            }
+            for (0..height) |row| {
+                for (0..width) |col| {
+                    const receptions = &self.receptive_fields[row][col];
+                    const center = Point{ row, col };
+                    inline for (receptions, receptive_offsets) |*reception, offset| {
+                        const point = center + offset;
+                        reception.* = input_buffer[point[0]][point[1]];
+                    }
+                }
+            }
+            for (0..height) |row| {
+                for (0..width) |col| {
+                    output[row][col] = self.kernel.eval(&self.receptive_fields[row][col]);
+                }
+            }
+        }
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [height][width]f32,
+            output: *[height][width]f32,
+        ) void {
+            return self.eval(input, output);
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            activation_delta: *const [height][width]f32,
+            cost_gradient: *ParameterVector,
+            argument_delta: *[height][width]f32,
+        ) void {
+            delta_buffer = @splat(@splat(0));
+            for (0..height) |row| {
+                for (0..width) |col| {
+                    if (activation_delta[row][col] == 0) continue;
+                    const field = &self.receptive_fields[row][col];
+                    cost_gradient.* += self.kernel.gradient(field) *
+                        @as(ParameterVector, @splat(activation_delta[row][col]));
+                    const argument_gradient = self.kernel.diff(field);
+                    const center = Point{ row, col };
+                    for (receptive_offsets, 0..) |offset, k| {
+                        const point = center + offset;
+                        delta_buffer[point[0]][point[1]] +=
+                            argument_gradient[k] * activation_delta[row][col];
+                    }
+                }
+            }
+            for (delta_buffer[1 .. delta_buffer.len - 1], argument_delta) |*buffer_row, *delta| {
+                @memcpy(delta, buffer_row[1 .. buffer_row.len - 1]);
+            }
+        }
+
+        pub fn init(_: *Self, parameters: *ParameterVector) void {
+            for (0..parameter_count / 2) |j| parameters[j] = 1;
+            for (parameter_count / 2..parameter_count) |j| parameters[j] = 0;
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *ParameterVector) void {
+            self.kernel.beta = @as(ParameterVector, @splat(1)) /
+                (@as(ParameterVector, @splat(1)) + @exp(-parameters.*));
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+    };
+}
+
+fn MultiGate(arity: usize) type {
+    return struct {
+        const Self = @This();
+
+        const beta_len = 1 << arity;
+        const Beta = @Vector(beta_len, f32);
+        const ArgumentVector = @Vector(arity, f32);
+
+        beta: Beta,
+
+        // Evaluates the packed differentiable logic gate.
+        pub fn eval(gate: *const Self, input: *const [arity]f32) f32 {
+            @setFloatMode(.optimized);
+            var result: f32 = 0;
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            inline for (0..beta_len) |i| {
+                var product: f32 = gate.beta[i];
+                inline for (input, 0..) |x, bit| {
+                    product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
+                }
+                result += product;
+            }
+            return result;
+        }
+
+        pub fn diff(gate: *const Self, input: *const [arity]f32) ArgumentVector {
+            @setFloatMode(.optimized);
+            var result: ArgumentVector = @splat(0);
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            inline for (0..beta_len) |i| {
+                var product: f32 = gate.beta[i];
+                inline for (input, 0..) |x, bit| {
+                    product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
+                }
+                inline for (0..arity) |j| {
+                    const x = input[j];
+                    result[j] += product /
+                        if (comptime (1 << j) & i != 0) (x + 1e-09) else -(1 - x - 1e-09);
+                }
+            }
+            return result;
+        }
+
+        pub fn gradient(gate: *const Self, input: *const [arity]f32) Beta {
+            @setFloatMode(.optimized);
+            var result: Beta = undefined;
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            inline for (0..beta_len) |j| {
+                var product: f32 = (1 - gate.beta[j]) * gate.beta[j];
+                inline for (input, 0..) |x, bit| {
+                    product *= if (comptime (1 << bit) & j != 0) x else (1 - x);
+                }
+                result[j] = product;
+            }
+            return result;
+        }
+    };
+}
+
 pub const MultiLogicOptions = struct {
     arity: usize,
     rand: *std.Random,
@@ -503,28 +673,27 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
                 inline for (0..parameter_vector_len) |i| {
                     var product: f32 = gate.sigma[i];
                     inline for (input, 0..) |x, bit| {
-                        product *= if ((1 << bit) & i != 0) x else (1 - x);
+                        product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
                     }
                     result += product;
                 }
                 return result;
             }
 
+            // Optimization: Use greycode.
             pub fn diff(gate: *const Gate, input: *const [arity]f32) ArgumentVector {
                 @setFloatMode(.optimized);
                 var result: ArgumentVector = @splat(0);
                 @setEvalBranchQuota(4 * parameter_vector_len * arity * arity);
-                inline for (0..arity) |j| {
-                    inline for (0..parameter_vector_len) |i| {
-                        var product: f32 = gate.sigma[i];
-                        inline for (input, 0..) |x, bit| {
-                            if (bit != j) {
-                                product *= if ((1 << bit) & i != 0) x else (1 - x);
-                            } else {
-                                product *= if ((1 << bit) & i != 0) 1 else -1;
-                            }
-                        }
-                        result[j] += product;
+                inline for (0..parameter_vector_len) |i| {
+                    var product: f32 = gate.sigma[i];
+                    inline for (input, 0..) |x, bit| {
+                        product *= if (comptime (1 << bit) & i != 0) x + 1e-09 else (1 - x + 1e-09);
+                    }
+                    inline for (0..arity) |j| {
+                        const x = input[j];
+                        result[j] += product /
+                            if (comptime (1 << j) & i != 0) (x + 1e-09) else -(1 - x + 1e-09);
                     }
                 }
                 return result;
@@ -537,7 +706,7 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
                 inline for (0..parameter_vector_len) |j| {
                     var product: f32 = (1 - gate.sigma[j]) * gate.sigma[j];
                     inline for (input, 0..) |x, bit| {
-                        product *= if ((1 << bit) & j != 0) x else (1 - x);
+                        product *= if (comptime (1 << bit) & j != 0) x else (1 - x);
                     }
                     result[j] = product;
                 }
@@ -634,6 +803,87 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
 
         pub fn giveParameters(self: *Self) void {
             _ = self;
+        }
+    };
+}
+
+pub fn MaxPool(height: usize, width: usize) type {
+    return struct {
+        const Self = @This();
+
+        comptime {
+            assert(height % 2 == 0);
+            assert(width % 2 == 0);
+        }
+
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = height * width;
+        pub const dim_out = height * width / 4;
+
+        activation: [height / 2][width / 2]f32,
+        max_index: [height / 2][width / 2]usize,
+
+        pub fn init(_: *Self) void {}
+
+        pub fn eval(
+            _: *Self,
+            input: *const [height][width]f32,
+            output: *[height / 2][width / 2]f32,
+        ) void {
+            for (0..height / 2) |row| {
+                for (0..width / 2) |col| {
+                    output[row][col] = std.mem.max(f32, &.{
+                        input[2 * row][2 * col],
+                        input[2 * row][2 * col + 1],
+                        input[2 * row + 1][2 * col],
+                        input[2 * row][2 * col + 1],
+                    });
+                }
+            }
+        }
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [height][width]f32,
+            output: *[height / 2][width / 2]f32,
+        ) void {
+            for (0..height / 2) |row| {
+                for (0..width / 2) |col| {
+                    self.activation[row][col] = std.mem.max(f32, &.{
+                        input[2 * row][2 * col],
+                        input[2 * row][2 * col + 1],
+                        input[2 * row + 1][2 * col],
+                        input[2 * row][2 * col + 1],
+                    });
+                    output[row][col] = self.activation[row][col];
+                    self.max_index[row][col] = std.mem.indexOfMax(f32, &.{
+                        input[2 * row][2 * col],
+                        input[2 * row][2 * col + 1],
+                        input[2 * row + 1][2 * col],
+                        input[2 * row][2 * col + 1],
+                    });
+                }
+            }
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            activation_delta: *const [height / 2][width / 2]f32,
+            argument_delta: *[height][width]f32,
+        ) void {
+            argument_delta.* = @splat(@splat(0));
+            for (0..height / 2) |row| {
+                for (0..width / 2) |col| {
+                    switch (self.max_index[row][col]) {
+                        0 => argument_delta[2 * row][2 * col] = activation_delta[row][col],
+                        1 => argument_delta[2 * row][2 * col + 1] = activation_delta[row][col],
+                        2 => argument_delta[2 * row + 1][2 * col] = activation_delta[row][col],
+                        3 => argument_delta[2 * row][2 * col + 1] = activation_delta[row][col],
+                        else => unreachable,
+                    }
+                }
+            }
         }
     };
 }
@@ -821,21 +1071,3 @@ pub fn MultiLogicMax(dim_in_: usize, dim_out_: usize, options: MultiLogicOptions
         }
     };
 }
-
-// pub fn ConvolutionLogic(depth: usize, height: usize, width: usize) type {
-//     return struct {
-//         const Self = @This();
-
-//         pub const InputElement = f32;
-//         pub const OutputElement = f32;
-//         pub const dim_in = depth * height * width;
-//         pub const dim_out = depth * height * width;
-//         pub const parameter_count = 1 << 9;
-
-//         pub fn eval(
-//             self: *const Self,
-//             input: *const [depth][height][width]f32,
-//             output: *[depth][height][width]f32,
-//         ) void {}
-//     };
-// }

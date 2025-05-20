@@ -58,15 +58,20 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const MultiLogic = aesia.layer.MultiLogicGate;
+const ConvolutionLogic = aesia.layer.ConvolutionLogic;
+const MultiLogicGate = aesia.layer.MultiLogicGate;
+const MultiLogicMax = aesia.layer.MultiLogicMax;
 const LogicLayer = aesia.layer.PackedLogic;
 const GroupSum = aesia.layer.GroupSum;
+const MaxPool = aesia.layer.MaxPool;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
-const width = 24000;
+const width = 2000;
 const Model = aesia.Model(&.{
-    LogicLayer(784, width, .{ .rand = &rand }),
+    ConvolutionLogic(28, 28),
+    MaxPool(28, 28),
+    LogicLayer(14 * 14, width, .{ .rand = &rand }),
     LogicLayer(width, width, .{ .rand = &rand }),
     GroupSum(width, 10),
 }, .{
@@ -95,11 +100,11 @@ pub fn main() !void {
     // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
     // model.unlock();
 
-    const training_count = 60_000;
+    const training_count = 1_000;
     const validate_count = 10_000;
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 40;
+    const epoch_count = 10;
     const batch_size = 32;
     model.train(
         .init(images_training[0..training_count], labels_training[0..training_count]),

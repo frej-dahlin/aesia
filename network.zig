@@ -314,9 +314,9 @@ pub fn Network(Layers: []const type) type {
                 const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
                 const layer_output = buffer.back(LayerOutput(Layer));
                 if (comptime tag(Layer) == .namespace) {
-                    Layer.eval(layer_input, layer_output);
+                    Layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
                 } else {
-                    layer.eval(layer_input, layer_output);
+                    layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
                 }
                 buffer.flip();
             }
@@ -357,7 +357,7 @@ pub fn Network(Layers: []const type) type {
                     const slice: *[range.len]f32 = @alignCast(
                         @ptrCast(parameters[range.from..range.to()]),
                     );
-                    layer.init(slice);
+                    layer.init(@alignCast(slice));
                 } else {
                     layer.init();
                 }
@@ -371,9 +371,9 @@ pub fn Network(Layers: []const type) type {
                 const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
                 const layer_output = buffer.back(LayerOutput(Layer));
                 if (@sizeOf(Layer) > 0) {
-                    layer.forwardPass(layer_input, layer_output);
+                    layer.forwardPass(@ptrCast(layer_input), @ptrCast(layer_output));
                 } else {
-                    Layer.forwardPass(layer_input, layer_output);
+                    Layer.forwardPass(@ptrCast(layer_input), @ptrCast(layer_output));
                 }
                 buffer.flip();
             }
@@ -398,12 +398,16 @@ pub fn Network(Layers: []const type) type {
                 const output = buffer.back([Layer.dim_in]f32);
                 const range = parameter_ranges[l];
                 if (@sizeOf(Layer) == 0) {
-                    Layer.backwardPass(input, output);
+                    Layer.backwardPass(@ptrCast(input), @ptrCast(output));
                 } else if (range.len == 0) {
-                    layer.backwardPass(input, output);
+                    layer.backwardPass(@ptrCast(input), @ptrCast(output));
                 } else {
                     const gradient_slice = gradient[range.from..range.to()];
-                    layer.backwardPass(input, @alignCast(@ptrCast(gradient_slice)), output);
+                    layer.backwardPass(
+                        @ptrCast(input),
+                        @alignCast(@ptrCast(gradient_slice)),
+                        @ptrCast(output),
+                    );
                 }
                 buffer.flip();
             }
