@@ -54,46 +54,20 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                 return switch (w) {
                     0 => 0,
                     1 => a * b,
-                    2 => f: {
-                        break :f a - a * b;
-                    },
-                    3 => f: {
-                        break :f a;
-                    },
-                    4 => f: {
-                        break :f b - a * b;
-                    },
-                    5 => f: {
-                        break :f b;
-                    },
-                    6 => f: {
-                        break :f a + b - 2 * a * b;
-                    },
-                    7 => f: {
-                        break :f a + b - a * b;
-                    },
-                    15 => f: {
-                        break :f 1 - (a + b - a * b);
-                    },
-                    14 => f: {
-                        break :f 1 - (a + b - 2 * a * b);
-                    },
-                    13 => f: {
-                        break :f 1 - b;
-                    },
-                    12 => f: {
-                        break :f 1 - (b - a * b);
-                    },
-                    11 => f: {
-                        break :f 1 - a;
-                    },
-                    10 => f: {
-                        break :f 1 - (a - a * b);
-                    },
-                    9 => f: {
-                        break :f 1 - a * b;
-                    },
+                    2 => a - a * b,
+                    3 => a,
+                    4 => b - a * b,
+                    5 => b,
+                    6 => a + b - 2 * a * b,
+                    7 => a + b - a * b,
                     8 => 1,
+                    9 => 1 - a * b,
+                    10 => 1 - (a - a * b),
+                    11 => 1 - a,
+                    12 => 1 - (b - a * b),
+                    13 => 1 - b,
+                    14 => 1 - (a + b - 2 * a * b),
+                    15 => 1 - (a + b - a * b),
                     else => 0,
                 };
             }
