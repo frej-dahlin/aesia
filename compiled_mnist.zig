@@ -99,5 +99,5 @@ pub fn main() !void {
                 @as(f32, @floatFromInt(images_validate.len)),
         },
     );
-    std.debug.print("Training took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 }
