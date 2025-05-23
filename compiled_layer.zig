@@ -35,8 +35,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         const Self = @This();
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
-        pub const Input = [input_dim]usize;
-        pub const Output = [output_dim]usize;
+        pub const Input = std.StaticBitSet(input_dim);
+        pub const Output = std.StaticBitSet(output_dim);
         const node_count = output_dim;
         const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
         // There are 16 possible logic gates, each one is assigned a probability logit.
@@ -50,25 +50,25 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
 
         const gate = struct {
             /// Returns the gate applied to a and b
-            pub fn eval(a: usize, b: usize, w: usize) usize {
+            pub fn eval(a: bool, b: bool, w: usize) bool {
                 return switch (w) {
-                    0 => 0,
-                    1 => a * b,
-                    2 => a - a * b,
+                    0 => false,
+                    1 => a and b,
+                    2 => a and !b,
                     3 => a,
-                    4 => b - a * b,
+                    4 => b and !a,
                     5 => b,
-                    6 => a + b - 2 * a * b,
-                    7 => a + b - a * b,
-                    8 => 1,
-                    9 => 1 - a * b,
-                    10 => 1 - (a - a * b),
-                    11 => 1 - a,
-                    12 => 1 - (b - a * b),
-                    13 => 1 - b,
-                    14 => 1 - (a + b - 2 * a * b),
-                    15 => 1 - (a + b - a * b),
-                    else => 0,
+                    6 => a and !b or b and !a,
+                    7 => a or b,
+                    8 => true,
+                    9 => !(a and b),
+                    10 => !(a and !b),
+                    11 => !a,
+                    12 => !(b and !a),
+                    13 => !b,
+                    14 => !(a and !b or b and !a),
+                    15 => !(a or b),
+                    else => false,
                 };
             }
         };
@@ -121,10 +121,10 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
-            for (self.sigma, self.parents, output) |sigma, parents, *activation| {
-                const a = input[parents[0]];
-                const b = input[parents[1]];
-                activation.* = gate.eval(a, b, sigma);
+            for (self.sigma, self.parents, 0..) |sigma, parents, k| {
+                const a = input.isSet(parents[0]);
+                const b = input.isSet(parents[1]);
+                output.setValue(k, gate.eval(a, b, sigma));
             }
         }
     };
@@ -137,7 +137,7 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
         const Self = @This();
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
-        pub const Input = [input_dim]usize;
+        pub const Input = std.StaticBitSet(input_dim);
         pub const Output = [output_dim]usize;
         pub const parameter_count: usize = 0;
         pub const parameter_alignment: usize = 8;
@@ -152,7 +152,7 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
             for (output, 0..) |*coord, k| {
                 const from = k * quot;
                 const to = from + quot;
-                for (input[from..to]) |bit| coord.* += bit;
+                for (from..to) |l| coord.* += if (input.isSet(l)) 1 else 0;
             }
         }
     };
