@@ -412,7 +412,8 @@ pub fn ArrayBitSet(comptime MaskIntType: type, comptime size: usize) type {
         pub fn isSet(self: *const Self, index: usize) bool {
             assert(index < bit_length);
             if (num_masks == 0) return false; // doesn't compile in this case
-            return (self.masks[maskIndex(index)] & maskBit(index)) != 0;
+            const mask_index = maskIndex(index);
+            return (self.masks[mask_index] & maskBit(index)) != 0;
         }
 
         /// Returns the total number of set bits in this bit set.
