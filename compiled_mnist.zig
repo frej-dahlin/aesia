@@ -3,10 +3,12 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
+const StaticBitSet = @import("bitset.zig").StaticBitSet;
+
 const aesia = @import("aesia.zig");
 
 const dim = 28;
-const Image = std.StaticBitSet(dim*dim);
+const Image = StaticBitSet(dim*dim);
 const Label = u8;
 
 fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
