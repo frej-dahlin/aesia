@@ -137,10 +137,10 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             //     self.input2.setValue(k, b);
             // }
             //eval_gates(input1, input2, output, sigma);
-            for (self.sigma, self.parents, 0..) |sigma, parents, k| {
-                const a = input.isSet(parents[0]);
-                const b = input.isSet(parents[1]);
-                output.setValue(k, gate.eval(a, b, sigma));
+            for (0..node_count) |k| {
+                const a = input.isSet(self.parents[k][0]);
+                const b = input.isSet(self.parents[k][1]);
+                output.setValue(k, gate.eval(a, b, self.sigma[k]));
                 //output.setValue(k, gate.eval(self.input1.isSet(k), self.input2.isSet(k), sigma));
             }
         }
