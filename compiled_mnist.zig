@@ -6,7 +6,7 @@ const assert = std.debug.assert;
 const aesia = @import("aesia.zig");
 
 const dim = 28;
-const Image = [dim * dim]usize;
+const Image = std.StaticBitSet(dim*dim);
 const Label = u8;
 
 fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
@@ -30,8 +30,8 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     assert(col_count == dim);
     const images = try allocator.alloc(Image, image_count);
     for (images) |*image| {
-        for (image) |*pixel| {
-            pixel.* = if (try reader.readByte() > 0) 1 else 0;
+        for (0..dim*dim) |k| {
+            image.setValue(k, if (try reader.readByte() > 0) true else false);
         }
     }
     return images;
