@@ -1,6 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const StaticBitSet = @import("bitset.zig").StaticBitSet;
+
 const f32x16 = @Vector(16, f32);
 const f32x8 = @Vector(8, f32);
 const f32x4 = @Vector(4, f32);
@@ -35,8 +37,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         const Self = @This();
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
-        pub const Input = std.StaticBitSet(input_dim);
-        pub const Output = std.StaticBitSet(output_dim);
+        pub const Input = StaticBitSet(input_dim);
+        pub const Output = StaticBitSet(output_dim);
         const node_count = output_dim;
         const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
         // There are 16 possible logic gates, each one is assigned a probability logit.
@@ -47,6 +49,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         /// The preprocessed parameters
         sigma: [node_count]usize align(64),
         parents: [node_count][2]ParentIndex,
+        input1 : StaticBitSet(node_count),
+        input2 : StaticBitSet(node_count),
 
         const gate = struct {
             /// Returns the gate applied to a and b
@@ -71,6 +75,11 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                     else => false,
                 };
             }
+
+            //pub fn eval(a: std.StaticBitSet(node_count), b : std.StaticBitSet(node_count), beta0 : std.StaticBitSet(node_count), beta1 : std.StaticBitSet(node_count), beta2 : std.StaticBitSet(node_count), beta3 : std.StaticBitSet(node_count))
+            //{
+
+            //}
         };
         pub fn compile(self: *Self, parameters: *const [node_count][16]f32) void {
             for (0..node_count) |j| {
@@ -121,10 +130,18 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
-            for (self.sigma, self.parents, 0..) |sigma, parents, k| {
+            for (self.parents, 0..) |parents, k| {
                 const a = input.isSet(parents[0]);
                 const b = input.isSet(parents[1]);
-                output.setValue(k, gate.eval(a, b, sigma));
+                self.input1.setValue(k, a);
+                self.input2.setValue(k, b);
+            }
+            //eval_gates(input1, input2, output, sigma);
+            for (self.sigma, 0..) |sigma, k| {
+                //const a = input.isSet(parents[0]);
+                //const b = input.isSet(parents[1]);
+                //output.setValue(k, gate.eval(a, b, sigma));
+                output.setValue(k, gate.eval(self.input1.isSet(k), self.input2.isSet(k), sigma));
             }
         }
     };
@@ -137,7 +154,7 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
         const Self = @This();
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
-        pub const Input = std.StaticBitSet(input_dim);
+        pub const Input = StaticBitSet(input_dim);
         pub const Output = [output_dim]usize;
         pub const parameter_count: usize = 0;
         pub const parameter_alignment: usize = 8;
