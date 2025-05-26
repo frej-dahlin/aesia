@@ -504,17 +504,20 @@ pub fn ArrayBitSet(comptime MaskIntType: type, comptime size: usize) type {
 
         /// Flips all bits in this bit set which are present
         /// in the toggles bit set.
-        pub fn toggleSet(self: *Self, toggles: Self) void {
-            for (&self.masks, 0..) |*mask, i| {
-                mask.* ^= toggles.masks[i];
+        pub fn toggleSet(self: *Self, toggles: *const Self) void {
+            for (0..num_masks) |i| {
+                self.masks[i] ^= toggles.masks[i];
             }
         }
 
         /// Flips every bit in the bit set.
         pub fn toggleAll(self: *Self) void {
-            for (&self.masks) |*mask| {
-                mask.* = ~mask.*;
+            for (0..num_masks) |i| {
+                self.masks[i] = ~self.masks[i];
             }
+            //for (&self.masks) |*mask| {
+            //    mask.* = ~mask.*;
+            //}
 
             // Zero the padding bits
             if (num_masks > 0) {
@@ -525,18 +528,21 @@ pub fn ArrayBitSet(comptime MaskIntType: type, comptime size: usize) type {
         /// Performs a union of two bit sets, and stores the
         /// result in the first one.  Bits in the result are
         /// set if the corresponding bits were set in either input.
-        pub fn setUnion(self: *Self, other: Self) void {
-            for (&self.masks, 0..) |*mask, i| {
-                mask.* |= other.masks[i];
+        pub fn setUnion(self: *Self, other: *const Self) void {
+            for (0..num_masks) |i| {
+                self.masks[i] |= other.masks[i];
             }
         }
 
         /// Performs an intersection of two bit sets, and stores
         /// the result in the first one.  Bits in the result are
         /// set if the corresponding bits were set in both inputs.
-        pub fn setIntersection(self: *Self, other: Self) void {
-            for (&self.masks, 0..) |*mask, i| {
-                mask.* &= other.masks[i];
+        pub fn setIntersection(self: *Self, other: *const Self) void {
+            //for (&self.masks, 0..) |*mask, i| {
+            //    mask.* &= other.masks[i];
+            //}
+            for (0..num_masks) |i| {
+                self.masks[i] &= other.masks[i];
             }
         }
 

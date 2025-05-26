@@ -38,6 +38,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
         pub const Input = StaticBitSet(input_dim);
+        pub const BitSet = StaticBitSet(node_count);
         pub const Output = StaticBitSet(output_dim);
         const node_count = output_dim;
         const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
@@ -49,9 +50,20 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         /// The preprocessed parameters
         sigma: [node_count]usize align(64),
         parents: [node_count][2]ParentIndex,
-        input1 : StaticBitSet(node_count),
-        input2 : StaticBitSet(node_count),
+        input1 : BitSet,
+        input2 : BitSet,
+        beta0 : BitSet,
+        beta1 : BitSet,
+        beta2 : BitSet,
+        beta3 : BitSet,
 
+        empty : BitSet = BitSet.initEmpty(),
+        full : BitSet = BitSet.initFull(),
+        t1 : BitSet = BitSet.initEmpty(),
+        t2 : BitSet = BitSet.initEmpty(),
+        t3 : BitSet = BitSet.initEmpty(),
+
+        
         const gate = struct {
             /// Returns the gate applied to a and b
             pub fn eval(a: bool, b: bool, w: usize) bool {
@@ -76,18 +88,78 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                 };
             }
 
-            //pub fn eval(a: std.StaticBitSet(node_count), b : std.StaticBitSet(node_count), beta0 : std.StaticBitSet(node_count), beta1 : std.StaticBitSet(node_count), beta2 : std.StaticBitSet(node_count), beta3 : std.StaticBitSet(node_count))
-            //{
 
-            //}
+            pub fn evalGate(a: bool, b: bool, beta0: bool, beta1: bool, beta2: bool, beta3: bool) bool {
+                return (a and ((b and beta0) or (!b and beta1))) or (!a and ((b and beta2) or (!b and beta3)));
+            }
+            
         };
+        pub fn evalGates(self: *Self, a: *const BitSet, b : *const BitSet, noalias output: *Output) void {
+            //self.full.setIntersection(&self.empty);
+            //self.full.toggleAll();
+
+            self.t1.setIntersection(&self.empty);
+            self.t1.setUnion(b);
+            self.t1.setIntersection(&self.beta0);
+            self.t2.setIntersection(&self.empty);
+            self.t2.setUnion(b);
+            
+            self.t2.toggleSet(&self.full);
+            //self.t2.setUnion(&self.full);
+            //self.t2.toggleAll();
+            
+            self.t2.setIntersection(&self.beta1);
+            self.t1.setUnion(&self.t2);
+            self.t1.setIntersection(a);
+
+            output.setIntersection(&self.empty);
+            output.setUnion(b);
+            output.setIntersection(&self.beta2);
+            self.t2.setIntersection(&self.empty);
+
+            self.t2.setUnion(b);
+            
+            self.t2.toggleSet(&self.full);
+            //self.t2.toggleAll();
+            //self.t2.setUnion(&self.full);
+            
+            self.t2.setIntersection(&self.beta3);
+            output.setUnion(&self.t2);
+            self.t3.setIntersection(&self.empty);
+            self.t3.setUnion(a);
+            
+            self.t3.toggleSet(&self.full);
+            //self.t3.setUnion(&self.full);
+            //self.t3.toggleAll();
+            
+            output.setIntersection(&self.t3);
+            output.setUnion(&self.t1);
+        }
+
         pub fn compile(self: *Self, parameters: *const [node_count][16]f32) void {
+            self.full.setIntersection(&self.empty);
+            self.full.toggleAll();
+
             for (0..node_count) |j| {
                 self.sigma[j] = std.mem.indexOfMax(f32, &parameters[j]);
                 self.parents[j] = .{
                     options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
                     options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
                 };
+                if((self.sigma[j] >> 3) % 2 == 0)
+                {
+                    self.beta0.setValue(j, (self.sigma[j] >> 0) % 2 != 0);
+                    self.beta1.setValue(j, (self.sigma[j] >> 1) % 2 != 0);
+                    self.beta2.setValue(j, (self.sigma[j] >> 2) % 2 != 0);
+                    self.beta3.setValue(j, (self.sigma[j] >> 3) % 2 != 0);
+                }
+                else
+                {
+                    self.beta0.setValue(j, (self.sigma[j] >> 0) % 2 == 0);
+                    self.beta1.setValue(j, (self.sigma[j] >> 1) % 2 == 0);
+                    self.beta2.setValue(j, (self.sigma[j] >> 2) % 2 == 0);
+                    self.beta3.setValue(j, (self.sigma[j] >> 3) % 2 != 0);
+                }
             }
         }
 
@@ -130,19 +202,14 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
-            // for (self.parents, 0..) |parents, k| {
-            //     const a = input.isSet(parents[0]);
-            //     const b = input.isSet(parents[1]);
-            //     self.input1.setValue(k, a);
-            //     self.input2.setValue(k, b);
-            // }
-            //eval_gates(input1, input2, output, sigma);
             for (0..node_count) |k| {
                 const a = input.isSet(self.parents[k][0]);
                 const b = input.isSet(self.parents[k][1]);
-                output.setValue(k, gate.eval(a, b, self.sigma[k]));
-                //output.setValue(k, gate.eval(self.input1.isSet(k), self.input2.isSet(k), sigma));
+                self.input1.setValue(k, a);
+                self.input2.setValue(k, b);
             }
+
+            self.evalGates(&self.input1, &self.input2, output);
         }
     };
 }
