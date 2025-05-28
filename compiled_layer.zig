@@ -95,46 +95,17 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             }
             
         };
-        pub fn evalGates(self: *Self, a: *const BitSet, b : *const BitSet, noalias output: *Output) void {
-            //self.full.setIntersection(&self.empty);
-            //self.full.toggleAll();
+        pub fn evalGates(self: *Self, noalias output: *Output) void {
+            for(0..self.input1.masks.len) |i|{
+                const a = self.input1.masks[i];
+                const b = self.input2.masks[i];
+                const beta0 = self.beta0.masks[i];
+                const beta1 = self.beta1.masks[i];
+                const beta2 = self.beta2.masks[i];
+                const beta3 = self.beta3.masks[i];
 
-            self.t1.setIntersection(&self.empty);
-            self.t1.setUnion(b);
-            self.t1.setIntersection(&self.beta0);
-            self.t2.setIntersection(&self.empty);
-            self.t2.setUnion(b);
-            
-            self.t2.toggleSet(&self.full);
-            //self.t2.setUnion(&self.full);
-            //self.t2.toggleAll();
-            
-            self.t2.setIntersection(&self.beta1);
-            self.t1.setUnion(&self.t2);
-            self.t1.setIntersection(a);
-
-            output.setIntersection(&self.empty);
-            output.setUnion(b);
-            output.setIntersection(&self.beta2);
-            self.t2.setIntersection(&self.empty);
-
-            self.t2.setUnion(b);
-            
-            self.t2.toggleSet(&self.full);
-            //self.t2.toggleAll();
-            //self.t2.setUnion(&self.full);
-            
-            self.t2.setIntersection(&self.beta3);
-            output.setUnion(&self.t2);
-            self.t3.setIntersection(&self.empty);
-            self.t3.setUnion(a);
-            
-            self.t3.toggleSet(&self.full);
-            //self.t3.setUnion(&self.full);
-            //self.t3.toggleAll();
-            
-            output.setIntersection(&self.t3);
-            output.setUnion(&self.t1);
+                output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+            }
         }
 
         pub fn compile(self: *Self, parameters: *const [node_count][16]f32) void {
@@ -225,8 +196,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             self.permtime += permtimer.read();
             
             var evaltimer = std.time.Timer.start() catch unreachable;
-            _ = output;
-            //self.evalGates(&self.input1, &self.input2, output);
+            self.evalGates(output);
             self.evaltime += evaltimer.read();
         }
     };
