@@ -63,7 +63,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         t2 : BitSet = BitSet.initEmpty(),
         t3 : BitSet = BitSet.initEmpty(),
 
-        
+        permtime : u64 = 0,
+        evaltime : u64 = 0,
         const gate = struct {
             /// Returns the gate applied to a and b
             pub fn eval(a: bool, b: bool, w: usize) bool {
@@ -139,7 +140,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         pub fn compile(self: *Self, parameters: *const [node_count][16]f32) void {
             self.full.setIntersection(&self.empty);
             self.full.toggleAll();
-
+            self.permtime = 0;
+            self.evaltime = 0;
             for (0..node_count) |j| {
                 self.sigma[j] = std.mem.indexOfMax(f32, &parameters[j]);
                 self.parents[j] = .{
@@ -168,6 +170,15 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                 8 * beta[3] + 4 * beta[2] + 2 * beta[1] + beta[0]
             else
                 8 * beta[3] + 4 * beta[0] + 2 * beta[1] + beta[2];
+        }
+
+        pub fn getPermTime(self: *Self) u64
+        {
+            return self.permtime;
+        }
+        pub fn getEvalTime(self: *Self) u64
+        {
+            return self.evaltime;
         }
         // pub fn compilePacked(self: *Self, parameters: *const [node_count][4]f32) void {
         //     self.* = .{
@@ -202,6 +213,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
+
+            var permtimer = std.time.Timer.start() catch unreachable;
             for (0..node_count) |k| {
                 const a = input.isSet(self.parents[k][0]);
                 const b = input.isSet(self.parents[k][1]);
@@ -209,7 +222,12 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                 self.input2.setValue(k, b);
             }
 
-            self.evalGates(&self.input1, &self.input2, output);
+            self.permtime += permtimer.read();
+            
+            var evaltimer = std.time.Timer.start() catch unreachable;
+            _ = output;
+            //self.evalGates(&self.input1, &self.input2, output);
+            self.evaltime += evaltimer.read();
         }
     };
 }
@@ -225,6 +243,10 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
         pub const Output = [output_dim]usize;
         pub const parameter_count: usize = 0;
         pub const parameter_alignment: usize = 8;
+
+
+        pub var permtime : u64 = 0;
+        pub var evaltime : u64 = 0;
 
         const quot = input_dim / output_dim;
         const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(output_dim)));
