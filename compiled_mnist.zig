@@ -3,13 +3,15 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
+const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.boolarray;
 const StaticBitSet = @import("bitset.zig").StaticBitSet;
 
 const aesia = @import("aesia.zig");
 
 const dim = 28;
-const Image = StaticBitSet(dim*dim);
+const Image = if(rep == .bitset) StaticBitSet(dim*dim) else [dim * dim]bool;
 const Label = u8;
+
 
 fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     const file = try std.fs.cwd().openFile(path, .{});
@@ -33,7 +35,12 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     const images = try allocator.alloc(Image, image_count);
     for (images) |*image| {
         for (0..dim*dim) |k| {
-            image.setValue(k, if (try reader.readByte() > 0) true else false);
+            if(rep == .bitset){
+                image.setValue(k, if (try reader.readByte() > 0) true else false);
+            }
+            else{
+                image[k] = if (try reader.readByte() > 0) true else false;
+            }
         }
     }
     return images;
@@ -67,13 +74,13 @@ var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
 const width = 8000;
 const Network = @import("compiled_network.zig").Network(&.{
-    LogicLayer(784, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    GroupSum(width, 10),
+    LogicLayer(784, width, .{ .rand = &rand, .gateRepresentation = rep}),
+    LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
+    LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
+    LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
+    LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
+    LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
+    GroupSum(width, 10, .{ .rand = &rand, .gateRepresentation = rep }),
 });
 var network: Network = undefined;
 
@@ -104,5 +111,5 @@ pub fn main() !void {
     std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 
     std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].getPermTime() / std.time.ns_per_ms});
-    std.debug.print("Gate evaluation took: {d}ms\n", .{network.layers[1].getEvalTime() / std.time.ns_per_ms});
+    std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].getEvalTime() / std.time.ns_per_us});
 }
