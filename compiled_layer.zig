@@ -28,8 +28,16 @@ const f32x2 = @Vector(2, f32);
 ///     backwardPassLast : backwardPass without passing the delta backwards, see below
 /// Every layer must declare the following methods:
 ///     eval
+
+pub const GateRepresentation = enum {
+    boolarray,
+    bitset,
+};
+
 pub const LogicOptions = struct {
     rand: *std.Random,
+    gateRepresentation : GateRepresentation
+
 };
 
 pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
@@ -37,9 +45,9 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         const Self = @This();
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
-        pub const Input = StaticBitSet(input_dim);
+        pub const Input =  if (options.gateRepresentation == .bitset) StaticBitSet(input_dim)  else [input_dim]bool;
         pub const BitSet = StaticBitSet(node_count);
-        pub const Output = StaticBitSet(output_dim);
+        pub const Output =  if (options.gateRepresentation == .bitset) StaticBitSet(output_dim) else [output_dim]bool;
         const node_count = output_dim;
         const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
         // There are 16 possible logic gates, each one is assigned a probability logit.
@@ -48,20 +56,14 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         pub const parameter_alignment: usize = 64;
 
         /// The preprocessed parameters
-        sigma: [node_count]usize align(64),
+        sigma: [node_count]u8 align(64),
         parents: [node_count][2]ParentIndex,
-        input1 : BitSet,
-        input2 : BitSet,
-        beta0 : BitSet,
-        beta1 : BitSet,
-        beta2 : BitSet,
-        beta3 : BitSet,
-
-        empty : BitSet = BitSet.initEmpty(),
-        full : BitSet = BitSet.initFull(),
-        t1 : BitSet = BitSet.initEmpty(),
-        t2 : BitSet = BitSet.initEmpty(),
-        t3 : BitSet = BitSet.initEmpty(),
+        input1 : if (options.gateRepresentation == .bitset) BitSet  else [node_count]bool,
+        input2 : if (options.gateRepresentation == .bitset) BitSet  else [node_count]bool,
+        beta0 : if (options.gateRepresentation == .bitset) BitSet  else [node_count]bool,
+        beta1 : if (options.gateRepresentation == .bitset) BitSet  else [node_count]bool,
+        beta2 : if (options.gateRepresentation == .bitset) BitSet  else [node_count]bool,
+        beta3 : if (options.gateRepresentation == .bitset) BitSet  else [node_count]bool,
 
         permtime : u64 = 0,
         evaltime : u64 = 0,
@@ -91,47 +93,75 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
 
 
             pub fn evalGate(a: bool, b: bool, beta0: bool, beta1: bool, beta2: bool, beta3: bool) bool {
-                return (a and ((b and beta0) or (!b and beta1))) or (!a and ((b and beta2) or (!b and beta3)));
+                //return (a and ((b and beta0) or (!b and beta1))) or (!a and ((b and beta2) or (!b and beta3)));
+                return (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
             }
             
         };
-        pub fn evalGates(self: *Self, noalias output: *Output) void {
-            for(0..self.input1.masks.len) |i|{
-                const a = self.input1.masks[i];
-                const b = self.input2.masks[i];
-                const beta0 = self.beta0.masks[i];
-                const beta1 = self.beta1.masks[i];
-                const beta2 = self.beta2.masks[i];
-                const beta3 = self.beta3.masks[i];
 
-                output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+        pub fn evalGates(self: *Self, noalias output: *Output) void {
+            if(options.gateRepresentation == .bitset){
+                for(0..self.input1.masks.len) |i|{
+                    const a = self.input1.masks[i];
+                    const b = self.input2.masks[i];
+                    const beta0 = self.beta0.masks[i];
+                    const beta1 = self.beta1.masks[i];
+                    const beta2 = self.beta2.masks[i];
+                    const beta3 = self.beta3.masks[i];
+
+                    output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+                }
+            }
+            else{
+                for(0..node_count) |i|{
+                    const a = self.input1[i];
+                    const b = self.input2[i];
+                    const beta0 = self.beta0[i];
+                    const beta1 = self.beta1[i];
+                    const beta2 = self.beta2[i];
+                    const beta3 = self.beta3[i];
+
+                    output[i] = (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3);
+                }
             }
         }
 
         pub fn compile(self: *Self, parameters: *const [node_count][16]f32) void {
-            self.full.setIntersection(&self.empty);
-            self.full.toggleAll();
             self.permtime = 0;
             self.evaltime = 0;
             for (0..node_count) |j| {
-                self.sigma[j] = std.mem.indexOfMax(f32, &parameters[j]);
+                self.sigma[j] = @intCast(std.mem.indexOfMax(f32, &parameters[j]));
                 self.parents[j] = .{
                     options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
                     options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
                 };
-                if((self.sigma[j] >> 3) % 2 == 0)
-                {
-                    self.beta0.setValue(j, (self.sigma[j] >> 0) % 2 != 0);
-                    self.beta1.setValue(j, (self.sigma[j] >> 1) % 2 != 0);
-                    self.beta2.setValue(j, (self.sigma[j] >> 2) % 2 != 0);
-                    self.beta3.setValue(j, (self.sigma[j] >> 3) % 2 != 0);
+                if(options.gateRepresentation == .bitset){
+                    if((self.sigma[j] >> 3) % 2 == 0){
+                        self.beta0.setValue(j, (self.sigma[j] >> 0) % 2 != 0);
+                        self.beta1.setValue(j, (self.sigma[j] >> 1) % 2 != 0);
+                        self.beta2.setValue(j, (self.sigma[j] >> 2) % 2 != 0);
+                        self.beta3.setValue(j, (self.sigma[j] >> 3) % 2 != 0);
+                    }
+                    else{
+                        self.beta0.setValue(j, (self.sigma[j] >> 0) % 2 == 0);
+                        self.beta1.setValue(j, (self.sigma[j] >> 1) % 2 == 0);
+                        self.beta2.setValue(j, (self.sigma[j] >> 2) % 2 == 0);
+                        self.beta3.setValue(j, (self.sigma[j] >> 3) % 2 != 0);
+                    }
                 }
-                else
-                {
-                    self.beta0.setValue(j, (self.sigma[j] >> 0) % 2 == 0);
-                    self.beta1.setValue(j, (self.sigma[j] >> 1) % 2 == 0);
-                    self.beta2.setValue(j, (self.sigma[j] >> 2) % 2 == 0);
-                    self.beta3.setValue(j, (self.sigma[j] >> 3) % 2 != 0);
+                else{
+                    if((self.sigma[j] >> 3) % 2 == 0){
+                        self.beta0[j] = (self.sigma[j] >> 0) % 2 != 0;
+                        self.beta1[j] = (self.sigma[j] >> 1) % 2 != 0;
+                        self.beta2[j] = (self.sigma[j] >> 2) % 2 != 0;
+                        self.beta3[j] = (self.sigma[j] >> 3) % 2 != 0;
+                    }
+                    else{
+                        self.beta0[j] = (self.sigma[j] >> 0) % 2 == 0;
+                        self.beta1[j] = (self.sigma[j] >> 1) % 2 == 0;
+                        self.beta2[j] = (self.sigma[j] >> 2) % 2 == 0;
+                        self.beta3[j] = (self.sigma[j] >> 3) % 2 != 0;
+                    }
                 }
             }
         }
@@ -143,12 +173,10 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                 8 * beta[3] + 4 * beta[0] + 2 * beta[1] + beta[2];
         }
 
-        pub fn getPermTime(self: *Self) u64
-        {
+        pub fn getPermTime(self: *Self) u64{
             return self.permtime;
         }
-        pub fn getEvalTime(self: *Self) u64
-        {
+        pub fn getEvalTime(self: *Self) u64{
             return self.evaltime;
         }
         // pub fn compilePacked(self: *Self, parameters: *const [node_count][4]f32) void {
@@ -169,7 +197,7 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         //     }
         // }
 
-        pub fn init(self: *Self, parameters: *[node_count]usize) void {
+        pub fn init(self: *Self, parameters: *[node_count]bool) void {
             self.* = .{
                 .sigma = null,
                 .parents = undefined,
@@ -184,19 +212,35 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         }
 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
-
             var permtimer = std.time.Timer.start() catch unreachable;
-            for (0..node_count) |k| {
-                const a = input.isSet(self.parents[k][0]);
-                const b = input.isSet(self.parents[k][1]);
-                self.input1.setValue(k, a);
-                self.input2.setValue(k, b);
+            if(options.gateRepresentation == .bitset){
+                for (0..node_count) |k| {
+                    const a = input.isSet(self.parents[k][0]);
+                    const b = input.isSet(self.parents[k][1]);
+                    self.input1.setValue(k, a);
+                    self.input2.setValue(k, b);
+                }
+            }
+            else{
+                for (0..node_count) |k| {
+                    const a = input[self.parents[k][0]];
+                    const b = input[self.parents[k][1]];
+                    self.input1[k] = a;
+                    self.input2[k] = b;
+                }
             }
 
             self.permtime += permtimer.read();
             
             var evaltimer = std.time.Timer.start() catch unreachable;
-            self.evalGates(output);
+            if(options.gateRepresentation == .bitset){
+                self.evalGates(output);
+            }
+            else{
+                for (0..node_count) |k| {
+                    output[k] = gate.eval(self.input1[k], self.input2[k], self.sigma[k]);
+                }
+            }
             self.evaltime += evaltimer.read();
         }
     };
@@ -204,12 +248,12 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
 
 /// Divides the input into output_dim #buckets, each output is the sequential sum of
 /// input_dim / output_dim items of the input.
-pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
+pub fn GroupSum(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
         pub const input_dim = input_dim_;
         pub const output_dim = output_dim_;
-        pub const Input = StaticBitSet(input_dim);
+        pub const Input =  if (options.gateRepresentation == .bitset) StaticBitSet(input_dim)  else [input_dim]bool;
         pub const Output = [output_dim]usize;
         pub const parameter_count: usize = 0;
         pub const parameter_alignment: usize = 8;
@@ -228,7 +272,13 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize) type {
             for (output, 0..) |*coord, k| {
                 const from = k * quot;
                 const to = from + quot;
-                for (from..to) |l| coord.* += if (input.isSet(l)) 1 else 0;
+
+                if(options.gateRepresentation == .bitset){
+                    for (from..to) |l| coord.* += if (input.isSet(l)) 1 else 0;
+                }
+                else{
+                    for (from..to) |l| coord.* += if (input[l]) 1 else 0;
+                }
             }
         }
     };
