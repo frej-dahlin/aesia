@@ -200,11 +200,11 @@ pub fn Network(Layers: []const type) type {
     inline for (Layers) |Layer| check(Layer);
     inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
         if (prev.ItemOut != next.ItemIn) printCompileError(
-            "layers {s} and {s} have mismatched input/output item types",
+            "Aesia layers: {s} and {s} have mismatched input/output item types",
             .{ @typeName(prev), @typeName(next) },
         );
         if (prev.dim_out != next.dim_in) printCompileError(
-            "layers {s} and {s} have mismatched input/output dimension",
+            "Aesia layers: {s} and {s} have mismatched input/output dimension",
             .{ @typeName(prev), @typeName(next) },
         );
     }
@@ -357,7 +357,7 @@ pub fn Network(Layers: []const type) type {
                     const slice: *[range.len]f32 = @alignCast(
                         @ptrCast(parameters[range.from..range.to()]),
                     );
-                    layer.init(@alignCast(slice));
+                    layer.init(@alignCast(@ptrCast(slice)));
                 } else {
                     layer.init();
                 }

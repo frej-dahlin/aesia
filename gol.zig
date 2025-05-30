@@ -8,8 +8,8 @@ const aesia = @import("aesia.zig");
 const dim = 32;
 const State = [32][32]f32;
 
-const data_count = 1_000;
-const training_count = 1_000;
+const data_count = 10;
+const training_count = 9;
 
 var features: [data_count]State = undefined;
 var labels: [data_count]State = undefined;
@@ -28,7 +28,7 @@ const Model = aesia.Model(&.{
     ConvolutionLogic(32, 32),
 }, .{
     .Loss = aesia.loss.HalvedMeanSquareError(32 * 32),
-    .Optimizer = aesia.optimizer.Adam(.{ .learn_rate = 0.05 }),
+    .Optimizer = aesia.optimizer.Adam(.{ .learn_rate = 10 }),
 });
 var model: Model = undefined;
 
@@ -83,10 +83,10 @@ pub fn main() !void {
 
     var timer = try std.time.Timer.start();
     const epoch_count = 100;
-    const batch_size = 1;
+    const batch_size = 1000;
     model.train(
         .init(@ptrCast(features[0..training_count]), @ptrCast(labels[0..training_count])),
-        .init(@ptrCast(features[0..training_count]), @ptrCast(labels[0..training_count])),
+        .init(@ptrCast(features[training_count..]), @ptrCast(labels[training_count..])),
         epoch_count,
         batch_size,
     );

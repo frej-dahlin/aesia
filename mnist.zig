@@ -61,22 +61,50 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
 const ConvolutionLogic = aesia.layer.ConvolutionLogic;
 const MultiLogicGate = aesia.layer.MultiLogicGate;
 const MultiLogicMax = aesia.layer.MultiLogicMax;
+const MultiLogicXOR = aesia.layer.MultiLogicXOR;
 const LogicLayer = aesia.layer.PackedLogic;
 const GroupSum = aesia.layer.GroupSum;
 const MaxPool = aesia.layer.MaxPool;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
-const width = 2000;
+const width = 32_000;
+const kernel_count = 4;
 const Model = aesia.Model(&.{
-    ConvolutionLogic(28, 28),
-    MaxPool(28, 28),
-    LogicLayer(14 * 14, width, .{ .rand = &rand }),
-    LogicLayer(width, width, .{ .rand = &rand }),
-    GroupSum(width, 10),
+    ConvolutionLogic(.{
+        .depth = 1,
+        .height = 28,
+        .width = 28,
+        .kernel_count = kernel_count,
+        .kernel_size = .{ .height = 2, .width = 2 },
+        .stride = .{ .row = 2, .col = 2 },
+    }),
+    ConvolutionLogic(.{
+        .depth = kernel_count,
+        .height = 14,
+        .width = 14,
+        .kernel_count = 4,
+        .kernel_size = .{ .height = 2, .width = 2 },
+        .stride = .{ .row = 2, .col = 2 },
+    }),
+    ConvolutionLogic(.{
+        .depth = 4 * kernel_count,
+        .height = 7,
+        .width = 7,
+        .kernel_count = 4,
+        .kernel_size = .{ .height = 3, .width = 3 },
+        .stride = .{ .row = 2, .col = 2 },
+    }),
+    LogicLayer(16 * kernel_count * 3 * 3, 32_000, .{ .rand = &rand }),
+    LogicLayer(32_000, 16_000, .{ .rand = &rand }),
+    LogicLayer(16_000, 8_000, .{ .rand = &rand }),
+    GroupSum(8_000, 10),
 }, .{
     .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = aesia.optimizer.Adam(.{ .learn_rate = 0.05 }),
+    .Optimizer = aesia.optimizer.AdamW(.{
+        .learn_rate = 0.05,
+        .weight_decay = 0.002,
+    }),
 });
 var model: Model = undefined;
 
@@ -91,7 +119,7 @@ pub fn main() !void {
 
     // Load prior model.
     // It must have been initialized with seed = 0.
-    // std.debug.print("Loading latest mnist.model...", .{});
+    // std.debug.print("Lo * kernel_countading latest mnist.model...", .{});
     // const gigabyte = 1_000_000_000;
     // const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
     // defer allocator.free(parameter_bytes);
@@ -100,8 +128,26 @@ pub fn main() !void {
     // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
     // model.unlock();
 
-    const training_count = 1_000;
+    const training_count = 60_000;
     const validate_count = 10_000;
+
+    model.lock();
+    var correct_count: usize = 0;
+    for (images_validate, labels_validate) |image, label| {
+        const prediction = model.eval(&image);
+        if (std.mem.indexOfMax(f32, prediction) == label) correct_count += 1;
+    }
+    model.unlock();
+
+    std.debug.print(
+        "Correctly classified {d} / {d} ~ {d}%\n",
+        .{
+            correct_count,
+            images_validate.len,
+            100 * @as(f32, @floatFromInt(correct_count)) /
+                @as(f32, @floatFromInt(images_validate.len)),
+        },
+    );
 
     var timer = try std.time.Timer.start();
     const epoch_count = 10;
@@ -114,7 +160,7 @@ pub fn main() !void {
     );
 
     model.lock();
-    var correct_count: usize = 0;
+    correct_count = 0;
     for (images_validate, labels_validate) |image, label| {
         const prediction = model.eval(&image);
         if (std.mem.indexOfMax(f32, prediction) == label) correct_count += 1;

@@ -131,6 +131,7 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
             assert(!model.locked);
             assert(batch_size > 0);
             for (0..epoch_count) |epoch| {
+                var timer = std.time.Timer.start() catch unreachable;
                 var offset: usize = 0;
                 while (training.len() > offset) : (offset += batch_size) {
                     model.lock();
@@ -140,7 +141,10 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
                     model.optimizer.step(@ptrCast(&model.parameters), @ptrCast(&model.gradient));
                 }
                 model.lock();
-                if (validate.len() > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });
+                if (validate.len() > 0) std.debug.print(
+                    "epoch: {d}\tloss: {d:2.4}\telapsed seconds: {d}s\n",
+                    .{ epoch, model.cost(validate), timer.read() / std.time.ns_per_s },
+                );
                 model.unlock();
             }
         }
