@@ -307,6 +307,20 @@ pub fn Network(Layers: []const type) type {
             }
         }
 
+        pub fn readFromFile(parameters: *[parameter_count]f32, path: []const u8) !void {
+            const file = try std.fs.cwd().openFile(path, .{});
+            defer file.close();
+
+            var buffered = std.io.bufferedReader(file.reader());
+            var reader = buffered.reader();
+            inline for (parameter_ranges) |range| {
+                if (range.len > 0) {
+                    const slice = parameters[range.from..range.to()];
+                    _ = try reader.readAll(std.mem.sliceAsBytes(slice));
+                }
+            }
+        }
+
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;

@@ -502,7 +502,7 @@ pub fn ConvolutionLogicKernels(options: ConvolutionLogicKernelsOptions) type {
         const KernelParameters = @Vector(kernel_parameter_count, f32);
         pub const parameter_alignment = @alignOf(KernelParameters);
 
-        kernels: [kernel_count]MultiGate(kernel_argument_count),
+        kernels: [kernel_count]MultiGateApproximation(kernel_argument_count),
         receptions: [height_out][width_out][kernel_argument_count]f32,
 
         const Point = @Vector(2, usize);
@@ -566,9 +566,16 @@ pub fn ConvolutionLogicKernels(options: ConvolutionLogicKernelsOptions) type {
                 for (0..width_out) |col| {
                     const reception = &self.receptions[row][col];
                     for (0..kernel_count) |ply| {
-                        cost_gradient[ply] += self.kernels[ply].parameterGradient(reception) *
-                            @as(KernelParameters, @splat(activation_delta[ply][row][col]));
-                        const argument_gradient = self.kernels[ply].diff(reception);
+                        self.kernels[ply].findActivations(reception);
+                        inline for (self.kernels[ply].activations) |index| {
+                            cost_gradient[ply][index] += self.kernels[ply].parameterGradient(
+                                reception,
+                                index,
+                            ) * activation_delta[ply][row][col];
+                        }
+                        // cost_gradient[ply] += self.kernels[ply].parameterGradient(reception) *
+                        //     @as(KernelParameters, @splat(activation_delta[ply][row][col]));
+                        const argument_gradient = self.kernels[ply].argumentGradient(reception);
                         const top_left = Point{ row * stride.row, col * stride.col };
                         for (receptive_offsets, 0..) |offset, k| {
                             const point = top_left + offset;
@@ -692,6 +699,96 @@ pub fn ConvolutionLogic(options: ConvolutionLogicOptions) type {
     };
 }
 
+const MultiGateSetOptions = struct {
+    arity: usize,
+    count: usize,
+};
+
+fn MultiGateSet(options: MultiGateSetOptions) type {
+    return struct {
+        const Self = @This();
+
+        const gate_count = options.count;
+        const arity = options.arity;
+
+        const parameter_count = 1 << arity;
+        const ParameterVector = @Vector(parameter_count, f32);
+        const ParameterIndex = std.math.IntFittingRange(0, parameter_count - 1);
+        const ArgumentIndex = std.math.IntFittingRange(0, arity);
+
+        betas: [gate_count]ParameterVector,
+        activations: [arity + 1]ParameterIndex,
+
+        inline fn factor(index: ParameterIndex, comptime bit: ArgumentIndex, x: f32) f32 {
+            return if ((index >> bit) & 1 != 0) x else 1 - x;
+        }
+
+        fn findActivations(self: *Self, input: *const [arity]f32) void {
+            var max_index: ParameterIndex = 0;
+            inline for (0..arity) |j| {
+                max_index |= @as(ParameterIndex, @intFromFloat(@round(input[j]))) << j;
+            }
+            self.activations[arity] = max_index;
+            inline for (0..arity) |j| {
+                self.activations[j] = max_index ^ (1 << j);
+            }
+        }
+
+        /// Output *must* be memset to 0 prior to calling this function.
+        pub fn eval(self: *Self, input: *const [arity]f32, output: *[gate_count]f32) f32 {
+            @setFloatMode(.optimized);
+            self.findActivations(input);
+            inline for (self.activations) |index| {
+                var product = 1;
+                inline for (input, 0..) |x, bit| {
+                    product *= factor(index, bit, x);
+                }
+                // Note: swap k and index for cache efficiency?
+                inline for (0..gate_count) |k| {
+                    output[k] += product * self.betas[k][index];
+                }
+            }
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            input: *const [arity]f32,
+            cost_gradient: *[gate_count]ParameterVector,
+            activation_delta: *const [gate_count]f32,
+            argument_delta_buffer: *[arity]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            @memset(argument_delta_buffer, 0);
+            self.findActivations(input);
+            inline for (self.activations) |index| {
+                var product = 1;
+                inline for (input, 0..) |x, bit| {
+                    product *= factor(index, bit, x);
+                }
+                inline for (0..gate_count) |k| {
+                    const beta = self.betas[k];
+                    cost_gradient[k][index] += activation_delta[k] * product * beta * (1 - beta);
+                }
+            }
+            inline for (0..arity) |j| {
+                inline for (self.activations) |index| {
+                    var product = 1;
+                    inline for (input, 0..) |x, bit| {
+                        if (comptime bit == j) {
+                            product *= if ((index >> bit) & 1 != 0) 1 else -1;
+                        } else {
+                            product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                        }
+                    }
+                    inline for (0..gate_count) |k| {
+                        argument_delta_buffer[j] += activation_delta[k] * self.betas[k] * product;
+                    }
+                }
+            }
+        }
+    };
+}
+
 fn MultiGateApproximation(arity: usize) type {
     return struct {
         const Self = @This();
@@ -703,69 +800,71 @@ fn MultiGateApproximation(arity: usize) type {
         const ArgumentIndex = std.math.IntFittingRange(0, arity);
 
         beta: Beta,
+        activations: [arity + 1]ParameterIndex,
 
-        pub fn maxIndex(input: *const [arity]f32) ParameterIndex {
-            var index: ParameterIndex = 0;
+        pub fn findActivations(gate: *Self, input: *const [arity]f32) void {
+            var max_index: ParameterIndex = 0;
             inline for (0..arity) |j| {
-                index |= @as(ParameterIndex, @intFromFloat(@round(input[j]))) << j;
+                max_index |= @as(ParameterIndex, @intFromFloat(@round(input[j]))) << j;
             }
-            return index;
+            gate.activations[arity] = max_index;
+            inline for (0..arity) |j| {
+                gate.activations[j] = max_index ^ (1 << j);
+            }
+        }
+
+        inline fn factor(index: ParameterIndex, comptime bit: ArgumentIndex, x: f32) f32 {
+            return if ((index >> bit) & 1 != 0) x else 1 - x;
         }
 
         // Evaluates the packed differentiable logic gate.
-        pub fn eval(gate: *const Self, input: *const [arity]f32) f32 {
+        pub fn eval(gate: *Self, input: *const [arity]f32) f32 {
             @setFloatMode(.optimized);
-            const index = maxIndex(input);
-            return gate.beta[index];
-            // var product: f32 = gate.beta[index];
-            // inline for (0..arity) |j| {
-            //     const xor = @round(1 - input[j]);
-            //     const factor = input[j] + xor - 2 * xor * input[j];
-            //     product *= factor;
-            // }
-            // return product;
-        }
-
-        pub fn diff(gate: *const Self, input: *const [arity]f32) ArgumentVector {
-            @setFloatMode(.optimized);
-            var result: ArgumentVector = @splat(0);
-            @setEvalBranchQuota(4 * beta_len * arity * arity);
-            const index = maxIndex(input);
-            inline for (0..arity) |j| {
-                // var product: f32 = gate.beta[index];
-                // inline for (input, 0..) |x, bit| {
-                //     if (comptime bit != j) {
-                //         product *= if ((1 << bit) & index != 0) x else (1 - x);
-                //     } else {
-                //         product *= if ((1 << bit) & index != 0) 1 else -1;
-                //     }
-                // }
-                // result[j] += product;
-                result[j] = gate.beta[index] * if ((1 << j) & index != 0) @as(f32, 1) else @as(f32, -1);
+            gate.findActivations(input);
+            var result: f32 = 0;
+            inline for (gate.activations) |index| {
+                var product = gate.beta[index];
+                inline for (input, 0..) |x, bit| {
+                    product *= factor(index, bit, x);
+                }
+                result += product;
             }
-            @setFloatMode(.optimized);
             return result;
         }
 
-        const GradientResult = struct {
-            value: f32,
-            index: ParameterIndex,
-        };
-        pub fn argumentGradient(
-            gate: *const Self,
-            input: *const [arity]f32,
-        ) GradientResult {
+        pub fn argumentGradient(gate: *Self, input: *const [arity]f32) ArgumentVector {
             @setFloatMode(.optimized);
             @setEvalBranchQuota(4 * beta_len * arity * arity);
-            const index = maxIndex(input);
-            const product: f32 = (1 - gate.beta[index]) * gate.beta[index];
-            // inline for (input, 0..) |x, bit| {
-            //     product *= if ((1 << bit) & index != 0) x else (1 - x);
-            // }
-            return .{
-                .value = product,
-                .index = index,
-            };
+            gate.findActivations(input);
+            var result: ArgumentVector = @splat(0);
+            inline for (0..arity) |j| {
+                inline for (gate.activations) |index| {
+                    var product = gate.beta[index];
+                    inline for (input, 0..) |x, bit| {
+                        if (comptime bit == j) {
+                            product *= if ((index >> bit) & 1 != 0) 1 else -1;
+                        } else {
+                            product *= factor(index, bit, x);
+                        }
+                    }
+                    result[j] += product;
+                }
+            }
+            return result;
+        }
+
+        pub fn parameterGradient(
+            gate: *const Self,
+            input: *const [arity]f32,
+            index: ParameterIndex,
+        ) f32 {
+            @setFloatMode(.optimized);
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            var product: f32 = (1 - gate.beta[index]) * gate.beta[index];
+            inline for (input, 0..) |x, bit| {
+                product *= factor(index, bit, x);
+            }
+            return product;
         }
     };
 }
@@ -773,6 +872,8 @@ fn MultiGateApproximation(arity: usize) type {
 fn MultiGate(arity: usize) type {
     return struct {
         const Self = @This();
+
+        const tolerance = 0.25;
 
         const beta_len = 1 << arity;
         const Beta = @Vector(beta_len, f32);
@@ -782,9 +883,42 @@ fn MultiGate(arity: usize) type {
 
         beta: Beta,
 
+        pub fn eval_aux(
+            gate: *const Self,
+            input: *const [arity]f32,
+            product: f32,
+            comptime bit: ArgumentIndex,
+            index: ParameterIndex,
+        ) f32 {
+            @setFloatMode(.optimized);
+            if (comptime bit == arity - 1) {
+                return gate.beta[index] * product *
+                    if (index & 1 != 0) input[bit] else (1 - input[bit]);
+            }
+            if (input[bit] < tolerance) {
+                return gate.eval_aux(input, product * (1 - input[bit]), bit + 1, index);
+            } else if (input[bit] < 1 - tolerance) {
+                return gate.eval_aux(
+                    input,
+                    product * input[bit],
+                    bit + 1,
+                    index | (1 << bit),
+                ) + gate.eval_aux(
+                    input,
+                    product * (1 - input[bit]),
+                    bit + 1,
+                    index,
+                );
+            } else {
+                return gate.eval_aux(input, product * input[bit], bit + 1, index | (1 << bit));
+            }
+        }
+
         // Evaluates the packed differentiable logic gate.
         pub fn eval(gate: *const Self, input: *const [arity]f32) f32 {
             @setFloatMode(.optimized);
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            // return gate.eval_aux(input, 1, 0, 0);
             var result: f32 = 0;
             @setEvalBranchQuota(4 * beta_len * arity * arity);
             inline for (0..beta_len) |i| {
@@ -797,25 +931,80 @@ fn MultiGate(arity: usize) type {
             return result;
         }
 
+        pub fn diff_aux(
+            gate: *const Self,
+            input: *const [arity]f32,
+            product: f32,
+            comptime bit: ArgumentIndex,
+            comptime j: ArgumentIndex,
+            index: ParameterIndex,
+            result: *ArgumentVector,
+        ) void {
+            @setFloatMode(.optimized);
+            if (comptime bit == arity - 1) {
+                if (comptime bit == j) {
+                    result[j] += if (index & 1 != 0)
+                        gate.beta[index] * product
+                    else
+                        -gate.beta[index] * product;
+                } else {
+                    result[j] += gate.beta[index] * product *
+                        if (index & 1 != 0) input[bit] else (1 - input[bit]);
+                }
+                return;
+            }
+            if (comptime bit == j) {
+                gate.diff_aux(input, product, bit + 1, j, index | (1 << bit), result);
+                gate.diff_aux(input, -product, bit + 1, j, index, result);
+                return;
+            }
+            if (input[bit] < tolerance) {
+                gate.diff_aux(input, product, bit + 1, j, index, result);
+                return;
+            } else if (input[bit] < 1 - tolerance) {
+                gate.diff_aux(
+                    input,
+                    product * input[bit],
+                    bit + 1,
+                    j,
+                    index | (1 << bit),
+                    result,
+                );
+                gate.diff_aux(
+                    input,
+                    product * (1 - input[bit]),
+                    bit + 1,
+                    j,
+                    index,
+                    result,
+                );
+                return;
+            } else {
+                gate.diff_aux(input, product, bit + 1, j, index | (1 << bit), result);
+            }
+        }
+
         pub fn diff(gate: *const Self, input: *const [arity]f32) ArgumentVector {
             @setFloatMode(.optimized);
             var result: ArgumentVector = @splat(0);
             @setEvalBranchQuota(4 * beta_len * arity * arity);
-            inline for (0..arity) |j| {
-                inline for (0..beta_len) |i| {
-                    var product = gate.beta[i];
-                    inline for (input, 0..) |x, bit| {
-                        if (comptime bit != j) {
-                            product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
-                        } else {
-                            product *= if (comptime (1 << bit) & i != 0) 1 else -1;
-                        }
-                    }
-                    result[j] += product;
-                }
-            }
-            @setFloatMode(.optimized);
+            inline for (0..arity) |j| gate.diff_aux(input, 1, 0, j, 0, &result);
             return result;
+            // inline for (0..arity) |j| {
+            //     inline for (0..beta_len) |i| {
+            //         var product = gate.beta[i];
+            //         inline for (input, 0..) |x, bit| {
+            //             if (comptime bit != j) {
+            //                 product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
+            //             } else {
+            //                 product *= if (comptime (1 << bit) & i != 0) 1 else -1;
+            //             }
+            //         }
+            //         result[j] += product;
+            //     }
+            // }
+            // @setFloatMode(.optimized);
+            // return result;
         }
 
         pub fn parameterGradient(
