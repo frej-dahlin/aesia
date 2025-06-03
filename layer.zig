@@ -460,6 +460,372 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize) type {
     };
 }
 
+pub const LUTConvolutionPliesOptions = struct {
+    depth: usize,
+    height: usize,
+    width: usize,
+    lut_count: usize,
+    field_size: struct { height: usize, width: usize },
+    stride: struct { row: usize, col: usize },
+};
+
+pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
+    return struct {
+        const Self = @This();
+
+        // Unpack options.
+        const depth_in = options.depth;
+        const height_in = options.height;
+        const width_in = options.width;
+        const lut_count = options.lut_count;
+        const field_size = options.field_size;
+        const stride = options.stride;
+
+        const Ply = LUTConvolution(.{
+            .height = height_in,
+            .width = width_in,
+            .lut_count = lut_count,
+            .field_size = .{ .height = field_size.height, .width = field_size.width },
+            .stride = .{ .row = stride.row, .col = stride.col },
+        });
+        const depth_out = depth_in * lut_count;
+        const height_out = Ply.height_out;
+        const width_out = Ply.width_out;
+
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = depth_in * height_in * width_in;
+        pub const dim_out = depth_out * height_out * width_out;
+        pub const parameter_count = depth_in * Ply.parameter_count;
+        pub const parameter_alignment = Ply.parameter_alignment;
+
+        plies: [depth_in]Ply,
+
+        pub fn eval(
+            self: *Self,
+            input: *const [depth_in][height_in][width_in]f32,
+            output: *[depth_in][lut_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].eval(&input[ply], &output[ply]);
+            }
+        }
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [depth_in][height_in][width_in]f32,
+            output: *[depth_in][lut_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            return self.eval(input, output);
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            activation_delta: *const [depth_in][lut_count][height_out][width_out]f32,
+            cost_gradient: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+            argument_delta: *[depth_in][height_in][width_in]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].backwardPass(
+                    &activation_delta[ply],
+                    &cost_gradient[ply],
+                    &argument_delta[ply],
+                );
+            }
+        }
+
+        pub fn backwardPassFinal(
+            self: *Self,
+            activation_delta: *const [depth_in][lut_count][height_out][width_out]f32,
+            cost_gradient: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].backwardPassFinal(
+                    &activation_delta[ply],
+                    &cost_gradient[ply],
+                );
+            }
+        }
+
+        pub fn init(
+            self: *Self,
+            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+        ) void {
+            for (0..depth_in) |ply| self.plies[ply].init(&parameters[ply]);
+        }
+
+        pub fn takeParameters(
+            self: *Self,
+            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+        ) void {
+            for (0..depth_in) |ply| self.plies[ply].takeParameters(&parameters[ply]);
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+    };
+}
+
+pub const LUTConvolutionOptions = struct {
+    height: usize,
+    width: usize,
+    lut_count: usize,
+    field_size: struct { height: usize, width: usize },
+    stride: struct { row: usize, col: usize },
+};
+
+pub fn LUTConvolution(options: LUTConvolutionOptions) type {
+    return struct {
+        const Self = @This();
+
+        // Unpack options.
+        const stride = options.stride;
+        const height_in = options.height;
+        const width_in = options.width;
+        const lut_count = options.lut_count;
+        const field_height = options.field_size.height;
+        const field_width = options.field_size.width;
+        const lut_arity = field_height * field_width;
+        pub const lut_parameter_count = 1 << lut_arity;
+        comptime {
+            assert(field_height > 0);
+            assert(field_width > 0);
+            assert(lut_count > 0);
+            assert(height_in >= field_height);
+            assert(width_in >= field_width);
+            assert((height_in - field_height) % stride.row == 0);
+            assert((width_in - field_width) % stride.col == 0);
+        }
+        const height_out = (height_in - field_height) / stride.row + 1;
+        const width_out = (width_in - field_width) / stride.col + 1;
+
+        const ArgumentIndex = std.math.IntFittingRange(0, lut_arity);
+        const ExpitIndex = std.math.IntFittingRange(0, lut_parameter_count - 1);
+
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = height_in * width_in;
+        pub const dim_out = height_out * width_out * lut_count;
+        pub const parameter_count = lut_count * lut_parameter_count;
+        pub const parameter_alignment = 64;
+
+        // The lookup tables are stored in column major order, this is because we evaluate
+        // all lookup tables given a certain input.
+        expits: [lut_parameter_count][lut_count]f32,
+        activations: [height_in][width_in][lut_arity + 1]ExpitIndex,
+        receptions: [height_out][width_out][lut_arity]f32,
+
+        pub fn init(_: *Self, parameters: *[lut_parameter_count][lut_count]f32) void {
+            for (0..lut_parameter_count / 2) |i| {
+                for (0..lut_count) |k| {
+                    parameters[i][k] = 1;
+                }
+            }
+            for (lut_parameter_count / 2..lut_parameter_count) |i| {
+                for (0..lut_count) |k| {
+                    parameters[i][k] = 0;
+                }
+            }
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *[lut_parameter_count][lut_count]f32) void {
+            for (0..lut_parameter_count) |i| {
+                for (0..lut_count) |k| {
+                    self.expits[i][k] = 1 / (1 + @exp(-parameters[i][k]));
+                }
+            }
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+
+        const Point = @Vector(2, usize);
+        const receptive_offsets = blk: {
+            var offsets: [lut_arity]Point = undefined;
+            var i: usize = 0;
+            for (0..field_height) |row| {
+                for (0..field_width) |col| {
+                    offsets[i] = Point{ row, col };
+                    i += 1;
+                }
+            }
+            break :blk offsets;
+        };
+
+        fn findActivations(
+            self: *Self,
+            row: usize,
+            col: usize,
+        ) void {
+            var max_index: ExpitIndex = 0;
+            inline for (0..lut_arity) |j| {
+                const reception = &self.receptions[row][col];
+                max_index |= @as(ExpitIndex, @intFromFloat(@round(reception[j]))) << j;
+            }
+            self.activations[row][col][lut_arity] = max_index;
+            inline for (0..lut_arity) |j| {
+                self.activations[row][col][j] = max_index ^ (1 << j);
+            }
+        }
+
+        fn evalLUTs(
+            self: *Self,
+            row: usize,
+            col: usize,
+            output: *[lut_count][height_out][width_out]f32,
+        ) void {
+            inline for (self.activations[row][col]) |index| {
+                var product: f32 = 1;
+                inline for (self.receptions[row][col], 0..) |x, bit| {
+                    product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                }
+                inline for (0..lut_count) |k| {
+                    output[k][row][col] += self.expits[index][k] * product;
+                }
+            }
+        }
+
+        fn backwardPassFinalLUTs(
+            self: *Self,
+            row: usize,
+            col: usize,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+        ) void {
+            const reception = &self.receptions[row][col];
+            const activation = &self.activations[row][col];
+            inline for (activation) |index| {
+                var product: f32 = 1;
+                inline for (reception, 0..) |x, bit| {
+                    product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                }
+                inline for (0..lut_count) |k| {
+                    const expit = self.expits[index][k];
+                    cost_gradient[index][k] += activation_delta[k][row][col] * product * expit * (1 - expit);
+                }
+            }
+        }
+
+        fn backwardPassLUTs(
+            self: *Self,
+            row: usize,
+            col: usize,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+            argument_delta: *[lut_arity]f32,
+        ) void {
+            @memset(argument_delta, 0);
+            const reception = &self.receptions[row][col];
+            const activation = &self.activations[row][col];
+            inline for (activation) |index| {
+                var product: f32 = 1;
+                inline for (reception, 0..) |x, bit| {
+                    product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                }
+                inline for (0..lut_count) |k| {
+                    const expit = self.expits[index][k];
+                    cost_gradient[index][k] += activation_delta[k][row][col] * product * expit * (1 - expit);
+                }
+            }
+            @setEvalBranchQuota(8 * lut_count * lut_arity * lut_arity);
+            inline for (0..lut_arity) |j| {
+                inline for (activation) |index| {
+                    var product: f32 = 1;
+                    inline for (reception, 0..) |x, bit| {
+                        if (comptime bit == j) {
+                            product *= if ((index >> bit) & 1 != 0) 1 else -1;
+                        } else {
+                            product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                        }
+                    }
+                    inline for (0..lut_count) |k| {
+                        const expit = self.expits[index][k];
+                        argument_delta[j] += activation_delta[k][row][col] * product * expit;
+                    }
+                }
+            }
+        }
+
+        pub fn eval(
+            self: *Self,
+            input: *const [height_in][width_in]f32,
+            output: *[lut_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            // Collect receptions and find the activated indices.
+            output.* = @splat(@splat(@splat(0)));
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    const receptions = &self.receptions[row][col];
+                    const top_left = Point{ row * stride.row, col * stride.col };
+                    inline for (receptions, receptive_offsets) |*reception, offset| {
+                        const point = top_left + offset;
+                        reception.* = input[point[0]][point[1]];
+                    }
+                    self.findActivations(row, col);
+                }
+            }
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    self.evalLUTs(row, col, output);
+                }
+            }
+        }
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [height_in][width_in]f32,
+            output: *[height_out][width_out][lut_count]f32,
+        ) void {
+            return self.eval(input, output);
+        }
+
+        pub fn backwardPassFinal(
+            self: *Self,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+        ) void {
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    self.backwardPassFinalLUTs(
+                        row,
+                        col,
+                        activation_delta,
+                        cost_gradient,
+                    );
+                }
+            }
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+            argument_delta: *[height_in][width_in]f32,
+        ) void {
+            var argument_delta_buffer: [lut_arity]f32 = undefined;
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    self.backwardPassLUTs(
+                        row,
+                        col,
+                        activation_delta,
+                        cost_gradient,
+                        &argument_delta_buffer,
+                    );
+                    const top_left = Point{ row * stride.row, col * stride.col };
+                    inline for (receptive_offsets, argument_delta_buffer) |offset, delta| {
+                        const point = top_left + offset;
+                        argument_delta[point[0]][point[1]] += delta;
+                    }
+                }
+            }
+        }
+    };
+}
+
 pub const ConvolutionLogicKernelsOptions = struct {
     height: usize,
     width: usize,
@@ -710,13 +1076,19 @@ fn MultiGateSet(options: MultiGateSetOptions) type {
 
         const gate_count = options.count;
         const arity = options.arity;
+        const gate_parameter_count = 1 << arity;
 
-        const parameter_count = 1 << arity;
-        const ParameterVector = @Vector(parameter_count, f32);
-        const ParameterIndex = std.math.IntFittingRange(0, parameter_count - 1);
+        pub const dim_in = arity;
+        pub const dim_out = gate_count;
+        pub const Input = [arity]f32;
+        pub const Output = [gate_count]f32;
+        pub const parameter_count = gate_count * gate_parameter_count;
+        pub const parameter_alignment = 64;
+
+        const ParameterIndex = std.math.IntFittingRange(0, gate_parameter_count - 1);
         const ArgumentIndex = std.math.IntFittingRange(0, arity);
 
-        betas: [gate_count]ParameterVector,
+        betas: [gate_parameter_count][gate_count]f32,
         activations: [arity + 1]ParameterIndex,
 
         inline fn factor(index: ParameterIndex, comptime bit: ArgumentIndex, x: f32) f32 {
@@ -735,7 +1107,7 @@ fn MultiGateSet(options: MultiGateSetOptions) type {
         }
 
         /// Output *must* be memset to 0 prior to calling this function.
-        pub fn eval(self: *Self, input: *const [arity]f32, output: *[gate_count]f32) f32 {
+        pub fn eval(self: *Self, input: *const [arity]f32, output: *[gate_count]f32) void {
             @setFloatMode(.optimized);
             self.findActivations(input);
             inline for (self.activations) |index| {
@@ -743,18 +1115,39 @@ fn MultiGateSet(options: MultiGateSetOptions) type {
                 inline for (input, 0..) |x, bit| {
                     product *= factor(index, bit, x);
                 }
-                // Note: swap k and index for cache efficiency?
                 inline for (0..gate_count) |k| {
-                    output[k] += product * self.betas[k][index];
+                    output[k] += product * self.betas[index][k];
                 }
             }
         }
 
+        pub fn init(_: *Self, parameters: *[gate_parameter_count][gate_count]f32) void {
+            for (0..gate_parameter_count / 2) |i| {
+                for (0..gate_count) |k| parameters[i][k] = 1;
+            }
+            for (gate_parameter_count / 2..gate_parameter_count) |i| {
+                for (0..gate_count) |k| parameters[i][k] = 0;
+            }
+        }
+
+        pub fn takeParameters(
+            self: *Self,
+            parameters: *[gate_parameter_count][gate_count]f32,
+        ) void {
+            for (0..gate_parameter_count) |i| {
+                for (0..gate_count) |k| {
+                    const logit = parameters[i][k];
+                    self.betas[i][k] = 1 / (1 + @exp(-logit));
+                }
+            }
+        }
+        pub fn giveParameters(_: *Self) void {}
+
         pub fn backwardPass(
             self: *Self,
             input: *const [arity]f32,
-            cost_gradient: *[gate_count]ParameterVector,
             activation_delta: *const [gate_count]f32,
+            cost_gradient: *[gate_parameter_count][gate_count]f32,
             argument_delta_buffer: *[arity]f32,
         ) void {
             @setFloatMode(.optimized);

@@ -65,37 +65,46 @@ const MultiLogicXOR = aesia.layer.MultiLogicXOR;
 const LogicLayer = aesia.layer.PackedLogic;
 const GroupSum = aesia.layer.GroupSum;
 const MaxPool = aesia.layer.MaxPool;
+const LUTConvolution = aesia.layer.LUTConvolutionPlies;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
 const width = 32_000;
-const kernel_count = 4;
+const model_scale = 16;
 const Model = aesia.Model(&.{
-    ConvolutionLogic(.{
+    LUTConvolution(.{
         .depth = 1,
         .height = 28,
         .width = 28,
-        .kernel_count = kernel_count,
-        .kernel_size = .{ .height = 2, .width = 2 },
+        .lut_count = model_scale,
+        .field_size = .{ .height = 3, .width = 3 },
+        .stride = .{ .row = 1, .col = 1 },
+    }),
+    LUTConvolution(.{
+        .depth = model_scale,
+        .height = 26,
+        .width = 26,
+        .lut_count = 1,
+        .field_size = .{ .height = 2, .width = 2 },
         .stride = .{ .row = 2, .col = 2 },
     }),
-    ConvolutionLogic(.{
-        .depth = kernel_count,
-        .height = 14,
-        .width = 14,
-        .kernel_count = 4,
-        .kernel_size = .{ .height = 2, .width = 2 },
+    LUTConvolution(.{
+        .depth = model_scale,
+        .height = 13,
+        .width = 13,
+        .lut_count = 4,
+        .field_size = .{ .height = 3, .width = 3 },
         .stride = .{ .row = 2, .col = 2 },
     }),
-    ConvolutionLogic(.{
-        .depth = 4 * kernel_count,
-        .height = 7,
-        .width = 7,
-        .kernel_count = 4,
-        .kernel_size = .{ .height = 3, .width = 3 },
+    LUTConvolution(.{
+        .depth = 4 * model_scale,
+        .height = 6,
+        .width = 6,
+        .lut_count = 4,
+        .field_size = .{ .height = 2, .width = 2 },
         .stride = .{ .row = 2, .col = 2 },
     }),
-    LogicLayer(16 * kernel_count * 3 * 3, 32_000, .{ .rand = &rand }),
+    LogicLayer(16 * model_scale * 3 * 3, 32_000, .{ .rand = &rand }),
     LogicLayer(32_000, 16_000, .{ .rand = &rand }),
     LogicLayer(16_000, 8_000, .{ .rand = &rand }),
     GroupSum(8_000, 10),
@@ -119,14 +128,11 @@ pub fn main() !void {
 
     // Load prior model.
     // It must have been initialized with seed = 0.
-    // std.debug.print("Lo * kernel_countading latest mnist.model...", .{});
-    // const gigabyte = 1_000_000_000;
-    // const parameter_bytes = try std.fs.cwd().readFileAlloc(allocator, "mnist.model", gigabyte);
-    // defer allocator.free(parameter_bytes);
-    // @memcpy(&model.parameters, std.mem.bytesAsSlice(f32, parameter_bytes));
-    // model.lock();
-    // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
-    // model.unlock();
+    std.debug.print("Loading latest mnist.model...", .{});
+    try model.readFromFile("mnist.model");
+    model.lock();
+    std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    model.unlock();
 
     const training_count = 60_000;
     const validate_count = 10_000;
@@ -150,8 +156,8 @@ pub fn main() !void {
     );
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 10;
-    const batch_size = 32;
+    const epoch_count = 20;
+    const batch_size = 128;
     model.train(
         .init(images_training[0..training_count], labels_training[0..training_count]),
         .init(images_validate[0..validate_count], labels_validate[0..validate_count]),

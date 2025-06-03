@@ -417,11 +417,18 @@ pub fn Network(Layers: []const type) type {
                     layer.backwardPass(@ptrCast(input), @ptrCast(output));
                 } else {
                     const gradient_slice = gradient[range.from..range.to()];
-                    layer.backwardPass(
-                        @ptrCast(input),
-                        @alignCast(@ptrCast(gradient_slice)),
-                        @ptrCast(output),
-                    );
+                    if (l == 0) {
+                        layer.backwardPassFinal(
+                            @ptrCast(input),
+                            @alignCast(@ptrCast(gradient_slice)),
+                        );
+                    } else {
+                        layer.backwardPass(
+                            @ptrCast(input),
+                            @alignCast(@ptrCast(gradient_slice)),
+                            @ptrCast(output),
+                        );
+                    }
                 }
                 buffer.flip();
             }
