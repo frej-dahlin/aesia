@@ -144,6 +144,7 @@ fn mustDeclareAs(
 fn check(Layer: type) void {
     const typeCheck = *const fn (type) void;
     const message_prefix = "Aesia layer:";
+    @setEvalBranchQuota(4000);
     inline for ([_]typeCheck{
         mustDeclareAs("ItemIn", &.{.isConst}, message_prefix),
         mustDeclareAs("ItemOut", &.{.isConst}, message_prefix),

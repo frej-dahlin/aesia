@@ -410,6 +410,22 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
             }
         }
 
+        /// Computes the cost gradient and the gradient with respect to the previous layer's
+        /// activations.
+        pub fn backwardPassFinal(
+            noalias self: *Self,
+            noalias input: *const [dim_out]f32,
+            noalias cost_gradient: *[node_count]f32x4,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..node_count) |j| {
+                const a, const b = self.arguments[j];
+                const beta = self.beta[j];
+                cost_gradient[j] += packed_gate.gradient(beta, a, b) *
+                    @as(f32x4, @splat(input[j]));
+            }
+        }
+
         /// Copies parameters as logits and preprocesses them through the logistic function.
         pub fn takeParameters(self: *Self, parameters: *[node_count]f32x4) void {
             @setFloatMode(.optimized);
@@ -615,7 +631,7 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         // The lookup tables are stored in column major order, this is because we evaluate
         // all lookup tables given a certain input.
         expits: [lut_parameter_count][lut_count]f32,
-        activations: [height_in][width_in][lut_arity + 1]ExpitIndex,
+        activations: [height_in][width_in][lut_arity * (lut_arity - 1) / 2 + lut_arity + 1]ExpitIndex,
         receptions: [height_out][width_out][lut_arity]f32,
 
         pub fn init(_: *Self, parameters: *[lut_parameter_count][lut_count]f32) void {
@@ -664,9 +680,19 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
                 const reception = &self.receptions[row][col];
                 max_index |= @as(ExpitIndex, @intFromFloat(@round(reception[j]))) << j;
             }
-            self.activations[row][col][lut_arity] = max_index;
+            var activation_index: usize = 0;
+            self.activations[row][col][activation_index] = max_index;
+            activation_index += 1;
             inline for (0..lut_arity) |j| {
-                self.activations[row][col][j] = max_index ^ (1 << j);
+                self.activations[row][col][activation_index] = max_index ^ (1 << j);
+                activation_index += 1;
+            }
+            inline for (0..lut_arity) |j| {
+                inline for (j + 1..lut_arity) |k| {
+                    self.activations[row][col][activation_index] =
+                        max_index ^ ((1 << j) | (1 << k));
+                    activation_index += 1;
+                }
             }
         }
 
@@ -676,7 +702,9 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             col: usize,
             output: *[lut_count][height_out][width_out]f32,
         ) void {
+            @setEvalBranchQuota(1000 * lut_arity * lut_count * lut_count);
             inline for (self.activations[row][col]) |index| {
+                // inline for (0..1 << lut_arity) |index| {
                 var product: f32 = 1;
                 inline for (self.receptions[row][col], 0..) |x, bit| {
                     product *= if ((index >> bit) & 1 != 0) x else 1 - x;
@@ -696,7 +724,9 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         ) void {
             const reception = &self.receptions[row][col];
             const activation = &self.activations[row][col];
+            @setEvalBranchQuota(100 * lut_count * lut_arity * lut_arity);
             inline for (activation) |index| {
+                // for (0..1 << lut_arity) |index| {
                 var product: f32 = 1;
                 inline for (reception, 0..) |x, bit| {
                     product *= if ((index >> bit) & 1 != 0) x else 1 - x;
@@ -719,7 +749,9 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             @memset(argument_delta, 0);
             const reception = &self.receptions[row][col];
             const activation = &self.activations[row][col];
+            @setEvalBranchQuota(100 * lut_count * lut_arity * lut_arity);
             inline for (activation) |index| {
+                // inline for (0..1 << lut_arity) |index| {
                 var product: f32 = 1;
                 inline for (reception, 0..) |x, bit| {
                     product *= if ((index >> bit) & 1 != 0) x else 1 - x;
@@ -729,9 +761,10 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
                     cost_gradient[index][k] += activation_delta[k][row][col] * product * expit * (1 - expit);
                 }
             }
-            @setEvalBranchQuota(8 * lut_count * lut_arity * lut_arity);
+            @setEvalBranchQuota(1000 * lut_count * lut_arity * lut_arity);
             inline for (0..lut_arity) |j| {
                 inline for (activation) |index| {
+                    // inline for (0..1 << lut_arity) |index| {
                     var product: f32 = 1;
                     inline for (reception, 0..) |x, bit| {
                         if (comptime bit == j) {
@@ -934,6 +967,7 @@ pub fn ConvolutionLogicKernels(options: ConvolutionLogicKernelsOptions) type {
                     for (0..kernel_count) |ply| {
                         self.kernels[ply].findActivations(reception);
                         inline for (self.kernels[ply].activations) |index| {
+                            // inline for (0..1 << lut_arity) |index| {
                             cost_gradient[ply][index] += self.kernels[ply].parameterGradient(
                                 reception,
                                 index,
@@ -1441,7 +1475,7 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
         pub const parameter_alignment: usize = @max(64, @alignOf(ParameterVector));
 
         const node_count = dim_out;
-        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
+        const ParentIndex = std.math.IntFittingRange(0, dim_in);
         const arity = options.arity;
         const parameter_vector_len = 1 << arity;
         const ParameterVector = @Vector(parameter_vector_len, f32);
@@ -1504,7 +1538,7 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
 
         gates: [node_count]Gate align(parameter_alignment),
         inputs: [node_count][arity]f32,
-        parents: [node_count][arity]std.math.IntFittingRange(0, dim_in - 1),
+        parents: [node_count][arity]ParentIndex,
         max_index: [node_count]ArgumentIndex,
 
         fn logistic(x: ParameterVector) ParameterVector {
@@ -1561,8 +1595,6 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
             }
         }
 
-        /// Fixme: Create a function "backwardPassFirst" that does not pass delta backwards,
-        ///  applicable for the first layer in a network only.
         pub fn backwardPass(
             noalias self: *Self,
             noalias input: *const [dim_out]f32,
@@ -1579,6 +1611,19 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
                 inline for (self.parents[j], 0..) |parent, k| {
                     output[parent] += argument_gradient[k] * input[j];
                 }
+            }
+        }
+
+        pub fn backwardPassFinal(
+            noalias self: *Self,
+            noalias input: *const [dim_out]f32,
+            noalias cost_gradient: *[node_count]ParameterVector,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..node_count) |j| {
+                const gate = &self.gates[j];
+                cost_gradient[j] += gate.gradient(&self.inputs[j]) *
+                    @as(ParameterVector, @splat(input[j]));
             }
         }
 
