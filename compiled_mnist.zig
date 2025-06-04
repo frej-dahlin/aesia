@@ -84,6 +84,15 @@ const Network = @import("compiled_network.zig").Network(&.{
     LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
     GroupSum(width, 10, .{ .rand = &rand, .gateRepresentation = rep }),
 });
+
+
+const width2 = 24000;
+const Network2 = @import("compiled_network.zig").Network(&.{
+    PackedLogicLayer(784, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
+    PackedLogicLayer(width2, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
+    GroupSum(width2, 10, .{ .rand = &rand, .gateRepresentation = rep }),
+});
+
 const model_scale = 4;
 const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
     LUTConvolution(.{
@@ -124,10 +133,12 @@ const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
     GroupSum(8_000, 10, .{ .rand = &rand, .gateRepresentation = rep }),
 });
 var network: Network = undefined;
+//var network: Network2 = undefined;
 var convNetwork: ConvolutionalNetwork = undefined;
 
 pub fn main() !void {
-    try network.compileFromFile("mnist.model");
+    //try network.compileFromFile("mnist.model");
+    //try network.compileFromFile("mnist_packed.model");
     const allocator = std.heap.page_allocator;
     const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
@@ -135,24 +146,24 @@ pub fn main() !void {
     var timer = try std.time.Timer.start();
 
     var correct_count: usize = 0;
-    for (images_validate, labels_validate) |image, label| {
-        const prediction = network.eval(&image);
-        if (std.mem.indexOfMax(usize, prediction) == label) correct_count += 1;
-    }
+    // for (images_validate, labels_validate) |image, label| {
+    //     const prediction = network.eval(&image);
+    //     if (std.mem.indexOfMax(usize, prediction) == label) correct_count += 1;
+    // }
 
-    std.debug.print(
-        "Correctly classified {d} / {d} ~ {d}%\n",
-        .{
-            correct_count,
-            images_validate.len,
-            100 * @as(f32, @floatFromInt(correct_count)) /
-                @as(f32, @floatFromInt(images_validate.len)),
-        },
-    );
-    std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    // std.debug.print(
+    //     "Correctly classified {d} / {d} ~ {d}%\n",
+    //     .{
+    //         correct_count,
+    //         images_validate.len,
+    //         100 * @as(f32, @floatFromInt(correct_count)) /
+    //             @as(f32, @floatFromInt(images_validate.len)),
+    //     },
+    // );
+    // std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 
-    std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].getPermTime() / std.time.ns_per_ms});
-    std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].getEvalTime() / std.time.ns_per_us});
+    // std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].getPermTime() / std.time.ns_per_ms});
+    // std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].getEvalTime() / std.time.ns_per_us});
 
 
     try convNetwork.compileFromFile("lut-convolution.model");

@@ -223,13 +223,14 @@ pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
             self.permtime += permtimer.read();
 
             var evaltimer = std.time.Timer.start() catch unreachable;
-            if (options.gateRepresentation == .bitset) {
-                self.evalGates(output);
-            } else {
-                for (0..node_count) |k| {
-                    output[k] = gate.eval(self.input1[k], self.input2[k], self.sigma[k]);
-                }
-            }
+            self.evalGates(output);
+            // if (options.gateRepresentation == .bitset) {
+            //     self.evalGates(output);
+            // } else {
+            //     for (0..node_count) |k| {
+            //         output[k] = gate.eval(self.input1[k], self.input2[k], self.sigma[k]);
+            //     }
+            // }
             self.evaltime += evaltimer.read();
         }
     };
@@ -321,7 +322,13 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
             }
         }
 
-        pub fn compile(self: *Self, parameters: *const [node_count][4]f32) void {
+
+        fn logistic(x: f32x4) f32x4 {
+            @setFloatMode(.optimized);
+            return @as(f32x4, @splat(1)) / (@as(f32x4, @splat(1)) + @exp(-x));
+        }
+
+        pub fn compile(self: *Self, parameters: *const [node_count]f32x4) void {
             self.permtime = 0;
             self.evaltime = 0;
 
@@ -330,27 +337,22 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
                     options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
                     options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
                 };
+
+                const sigma : f32x4 = logistic(parameters[j]);
+
                 if (options.gateRepresentation == .bitset) {
-                    self.beta0.setValue(j, @round(parameters[j][0]) != 0);
-                    self.beta1.setValue(j, @round(parameters[j][1]) != 0);
-                    self.beta2.setValue(j, @round(parameters[j][2]) != 0);
-                    self.beta3.setValue(j, @round(parameters[j][3]) != 0);
+                    self.beta0.setValue(j, @round(sigma[0]) != 0);
+                    self.beta1.setValue(j, @round(sigma[1]) != 0);
+                    self.beta2.setValue(j, @round(sigma[2]) != 0);
+                    self.beta3.setValue(j, @round(sigma[3]) != 0);
                 } else {
-                    self.beta0[j] = @round(parameters[j][0]) != 0;
-                    self.beta1[j] = @round(parameters[j][1]) != 0;
-                    self.beta2[j] = @round(parameters[j][2]) != 0;
-                    self.beta3[j] = @round(parameters[j][3]) != 0;
+                    self.beta0[j] = @round(sigma[0]) != 0;
+                    self.beta1[j] = @round(sigma[1]) != 0;
+                    self.beta2[j] = @round(sigma[2]) != 0;
+                    self.beta3[j] = @round(sigma[3]) != 0;
                 }
             }
         }
-
-        pub fn getPermTime(self: *Self) u64 {
-            return self.permtime;
-        }
-        pub fn getEvalTime(self: *Self) u64 {
-            return self.evaltime;
-        }
-
         pub fn init(self: *Self, parameters: *[node_count]bool) void {
             self.* = .{
                 .sigma = null,
@@ -396,6 +398,14 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
             // }
             self.evaltime += evaltimer.read();
         }
+
+        pub fn getPermTime(self: *Self) u64 {
+            return self.permtime;
+        }
+        pub fn getEvalTime(self: *Self) u64 {
+            return self.evaltime;
+        }
+
     };
 }
 /// Divides the input into dim_out #buckets, each output is the sequential sum of
@@ -589,7 +599,8 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         ) void {
             for (0..lut_parameter_count) |i| {
                 for (0..lut_count) |k| {
-                    self.expits[i][k] = (@round(parameters[i][k]) != 0);
+                    self.expits[i][k] = (@round(1 / (1 + @exp(-parameters[i][k]))) != 0);
+                    //self.expits[i][k] = (@round(parameters[i][k]) != 0);
                 }
             }
         }
@@ -619,6 +630,7 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             }
             var activation_index: usize = 0;
             self.activations[row][col][activation_index] = max_index;
+            activation_index += 1;
             inline for (0..lut_arity) |j| {
                 self.activations[row][col][activation_index] = max_index ^ (1 << j);
                 activation_index += 1;
@@ -644,7 +656,8 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
                     product = product and (if ((index >> bit) & 1 != 0) x else !x);
                 }
                 inline for (0..lut_count) |k| {
-                    output[k][row][col] = (output[k][row][col] or (self.expits[index][k] and product)) and (!output[k][row][col] or !(self.expits[index][k] and product));
+                    //output[k][row][col] = (output[k][row][col] or (self.expits[index][k] and product));
+                    output[k][row][col] = (output[k][row][col] or (self.expits[index][k] and product)) and !(output[k][row][col] and (self.expits[index][k] and product));
                 }
             }
         }
@@ -656,6 +669,14 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         ) void {
             // Collect receptions and find the activated indices.
             output.* = @splat(@splat(@splat(false)));
+
+            for (0..lut_count) |i| {
+                for (0..height_out) |j| {
+                    for (0..width_in) |k| {
+                        output[i][j][k] = false;
+                    }
+                }
+            }
             for (0..height_out) |row| {
                 for (0..width_out) |col| {
                     const receptions = &self.receptions[row][col];
