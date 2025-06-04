@@ -155,6 +155,29 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             }
         }
 
+        pub fn compilePacked(self: *Self, parameters: *const [node_count][4]f32) void {
+            self.permtime = 0;
+            self.evaltime = 0;
+
+            for (0..node_count) |j| {
+                self.parents[j] = .{
+                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                };
+                if (options.gateRepresentation == .bitset) {
+                    self.beta0.setValue(j, @round(parameters[j][0]) != 0);
+                    self.beta1.setValue(j, @round(parameters[j][1]) != 0);
+                    self.beta2.setValue(j, @round(parameters[j][2]) != 0);
+                    self.beta3.setValue(j, @round(parameters[j][3]) != 0);
+                } else {
+                    self.beta0[j] = @round(parameters[j][0]) % 2 != 0;
+                    self.beta1[j] = @round(parameters[j][1]) % 2 != 0;
+                    self.beta2[j] = @round(parameters[j][2]) % 2 != 0;
+                    self.beta3[j] = @round(parameters[j][3]) % 2 != 0;
+                }
+            }
+        }
+
         pub fn unpack(beta: [4]usize) usize {
             return if (beta[3] == 0)
                 8 * beta[3] + 4 * beta[2] + 2 * beta[1] + beta[0]
@@ -168,23 +191,6 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
         pub fn getEvalTime(self: *Self) u64 {
             return self.evaltime;
         }
-        // pub fn compilePacked(self: *Self, parameters: *const [node_count][4]f32) void {
-        //     self.* = .{
-        //         .sigma = null,
-        //         .parents = undefined,
-        //     };
-
-        //     for (0..node_count) |j| {
-        //         var beta0 = @round(parameters[j][0]);
-        //         var beta1 = @round(parameters[j][1]);
-        //         var beta2 = @round(parameters[j][2]);
-        //         var beta3 = @round(parameters[j][3]);
-        //         self.parents[j] = .{
-        //             options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-        //             options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-        //         };
-        //     }
-        // }
 
         pub fn init(self: *Self, parameters: *[node_count]bool) void {
             self.* = .{
