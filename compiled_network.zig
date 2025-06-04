@@ -72,8 +72,8 @@ pub fn DoubleBuffer(size: usize, alignment: usize) type {
 /// A layer is a type interface, it needs to declare:
 ///     Input      : input type
 ///     Output     : output type
-///     input_dim  : the dimension of the input
-///     output_dim : the dimension of the output
+///     dim_in  : the dimension of the input
+///     dim_out : the dimension of the output
 /// Every layer must declare the following methods:
 ///     eval
 ///     forwardPass
@@ -90,90 +90,124 @@ pub fn DoubleBuffer(size: usize, alignment: usize) type {
 ///     returnParameters : release the pointer to the paramters, this is called by worked threads after
 ///                        the main thread has called giveParameters
 ///     backwardPassLast : backwardPass without passing the delta backwards, see below
+
 const Tag = enum {
-    stateless,
+    namespace,
     statefull,
     trainable,
 };
 
-fn tag(comptime Layer: type) Tag {
+fn tag(Layer: type) Tag {
     if (@sizeOf(Layer) == 0) {
-        return .stateless;
+        return .namespace;
     } else if (!@hasDecl(Layer, "parameter_count")) {
         return .statefull;
     } else {
         return .trainable;
     }
 }
-
 fn printCompileError(comptime fmt: []const u8, args: anytype) void {
     @compileError(std.fmt.comptimePrint(fmt, args));
 }
 
-const ConstrainedDeclaration = struct {
-    name: []const u8,
-    constraints: []fn ([]const u8, anytype) void,
+const DeclarationConstraint = enum {
+    isConst,
+    isPositiveInt,
 };
 
-fn isConst(prefix: []const u8, field_ptr: anytype) void {
-    if (!@typeInfo(field_ptr).pointer.is_const) @compileError(prefix ++ " must be const");
-}
 
-const Decl = struct {
-    name: []const u8,
-    T: ?type,
-};
-
-fn requireDecl(Struct: type, decl: Decl, prefix: []const u8) void {
-    if (!@hasDecl(Struct, decl.name)) printCompileError(
-        "{s} '{s}' needs to declare '{s}'",
-        .{ prefix, @typeName(Struct), decl.name },
-    );
-    if (decl.T != null and @TypeOf(@field(Struct, decl.name)) != decl.T.?) printCompileError(
-        "{s} '{s}' must declare '{s}' to be of type '{s}'.",
-        .{ prefix, @typeName(Struct), decl.name, @typeName(decl.T.?) },
+fn mustNotDeclare(T: type, decl_name: []const u8, message_prefix: []const u8) void {
+    if (@hasDecl(T, decl_name)) printCompileError(
+        "{s} {s} must not declare '{s}'",
+        .{ message_prefix, @typeName(T), decl_name },
     );
 }
+fn mustDeclareAs(
+    decl_name: []const u8,
+    constraints: []const DeclarationConstraint,
+    message_prefix: []const u8,
+) fn (type) void {
+    return struct {
+        pub fn constrain(T: type) void {
+            const type_name = @typeName(T);
 
-fn requireNotDecl(Struct: type, decl: Decl, prefix: []const u8) void {
-    if (@hasDecl(Struct, decl.name)) printCompileError(
-        "{s} '{s}' is not allowed to declare '{s}'",
-        .{ prefix, @typeName(Struct), decl.name },
-    );
+            if (!@hasDecl(T, decl_name)) printCompileError(
+                "{s} {s} must declare '{s}'",
+                .{ message_prefix, type_name, decl_name },
+            );
+
+            for (constraints) |constraint| switch (constraint) {
+                .isConst => {
+                    const decl_ptr = &@field(T, decl_name);
+                    if (!@typeInfo(@TypeOf(decl_ptr)).pointer.is_const) printCompileError(
+                        "{s} {s} must declare '{s}' as const",
+                        .{ message_prefix, type_name, decl_name },
+                    );
+                },
+                .isPositiveInt => {
+                    const decl_value = @field(T, decl_name);
+                    const decl_type = @TypeOf(decl_value);
+                    const info = @typeInfo(decl_type);
+                    const condition = (decl_type == comptime_int or info == .int) and
+                        decl_value > 0;
+                    if (!condition) printCompileError(
+                        "{s} {s} must declare '{s}' as a positive integer",
+                        .{ message_prefix, type_name, decl_name },
+                    );
+                },
+            };
+        }
+    }.constrain;
 }
+
 
 /// Compile time checks for the layer interface.
 fn check(Layer: type) void {
-    const required_decls = [_]Decl{
-        .{ .name = "input_dim", .T = usize },
-        .{ .name = "output_dim", .T = usize },
-        .{ .name = "Input", .T = null },
-        .{ .name = "Output", .T = null },
-    };
-    const trainable_decls = [_]Decl{
-        .{ .name = "parameter_count", .T = usize },
-        .{ .name = "parameter_alignment", .T = usize },
-    };
-    inline for (required_decls) |decl| requireDecl(Layer, decl, "layer");
+    const typeCheck = *const fn (type) void;
+    const message_prefix = "Compiled layer:";
+    @setEvalBranchQuota(4000);
+    inline for ([_]typeCheck{
+        mustDeclareAs("ItemIn", &.{.isConst}, message_prefix),
+        mustDeclareAs("ItemOut", &.{.isConst}, message_prefix),
+        mustDeclareAs("dim_in", &.{ .isConst, .isPositiveInt }, message_prefix),
+        mustDeclareAs("dim_out", &.{ .isConst, .isPositiveInt }, message_prefix),
+        mustDeclareAs("Input", &.{ .isConst}, message_prefix),
+        mustDeclareAs("Output", &.{ .isConst}, message_prefix),
+    }) |constrain| constrain(Layer);
+
     switch (tag(Layer)) {
-        .stateless => {
-            inline for (trainable_decls) |decl| requireNotDecl(Layer, decl, "stateless layer");
-        },
-        .statefull => {
-            inline for (trainable_decls) |decl| requireNotDecl(Layer, decl, "statefull layer");
-        },
+        .namespace => {},
+        .statefull => {},
         .trainable => {
-            inline for (trainable_decls) |decl| requireDecl(Layer, decl, "statefull layer");
+            const trainable_prefix = "Compiled trainable layer:";
+            inline for ([_]typeCheck{
+                mustDeclareAs(
+                    "parameter_count",
+                    &.{ .isConst, .isPositiveInt },
+                    trainable_prefix,
+                ),
+                mustDeclareAs(
+                    "parameter_alignment",
+                    &.{ .isConst, .isPositiveInt },
+                    trainable_prefix,
+                ),
+            }) |constrain| constrain(Layer);
         },
     }
 }
 
 pub fn Network(Layers: []const type) type {
-    inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
-        if (prev.Output != next.Input) @compileError("Layers " ++ @typeName(prev) ++ " and " ++
-            @typeName(next) ++ " have non matching input & output types.");
-    }
     inline for (Layers) |Layer| check(Layer);
+    inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
+        if (prev.ItemOut != next.ItemIn) printCompileError(
+            "layers {s} and {s} have mismatched input/output item types",
+            .{ @typeName(prev), @typeName(next) },
+        );
+        if (prev.dim_out != next.dim_in) printCompileError(
+            "layers {s} and {s} have mismatched input/output dimension",
+            .{ @typeName(prev), @typeName(next) },
+        );
+    }
     return struct {
         const Self = @This();
 
@@ -221,10 +255,14 @@ pub fn Network(Layers: []const type) type {
 
         pub const LastLayer = Layers[Layers.len - 1];
         pub const FirstLayer = Layers[0];
-        pub const input_dim = FirstLayer.input_dim;
-        pub const output_dim = LastLayer.output_dim;
-        pub const Input = FirstLayer.Input;
-        pub const Output = LastLayer.Output;
+        pub const dim_in = FirstLayer.dim_in;
+        pub const dim_out = LastLayer.dim_out;
+        pub const ItemIn = FirstLayer.ItemIn;
+        pub const ItemOut = LastLayer.ItemOut;
+        //pub const Input = FirstLayer.Input;
+        //pub const Output = LastLayer.Output;
+        pub const Input = [dim_in]ItemIn;
+        pub const Output = [dim_out]ItemOut;
 
         const buffer_alignment = blk: {
             var max: usize = 0;
@@ -256,16 +294,23 @@ pub fn Network(Layers: []const type) type {
             .buffer = .default,
         };
 
+        fn LayerInput(Layer: type) type {
+            return [Layer.dim_in]Layer.ItemIn;
+        }
+        fn LayerOutput(Layer: type) type {
+            return [Layer.dim_out]Layer.ItemOut;
+        }
+
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
             inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(Layer.Input);
-                const layer_output = buffer.back(Layer.Output);
-                if (@sizeOf(Layer) > 0) {
-                    layer.eval(layer_input, layer_output);
+                const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
+                const layer_output = buffer.back(LayerOutput(Layer));
+                if (comptime tag(Layer) == .namespace) {
+                    Layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
                 } else {
-                    Layer.eval(layer_input, layer_output);
+                    layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
                 }
                 buffer.flip();
             }

@@ -8,11 +8,11 @@ const f32x8 = @Vector(8, f32);
 const f32x4 = @Vector(4, f32);
 const f32x2 = @Vector(2, f32);
 
-/// A discrete layer is a type interface, it needs to declare:
+/// A compiled layer is a type interface, it needs to declare:
 ///     Input      : input type
 ///     Output     : output type
-///     input_dim  : the dimension of the input
-///     output_dim : the dimension of the output
+///     dim_in  : the dimension of the input
+///     dim_out : the dimension of the output
 /// Optionally, the layer can make use of parameters, which have to be of type usize.
 /// Therefore every layer must declare
 ///     parameter_count : the number of parameters the layer will be allocated
@@ -35,16 +35,19 @@ pub const GateRepresentation = enum {
 
 pub const LogicOptions = struct { rand: *std.Random, gateRepresentation: GateRepresentation };
 
-pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
+pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
-        pub const input_dim = input_dim_;
-        pub const output_dim = output_dim_;
-        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(input_dim) else [input_dim]bool;
+        pub const ItemIn = bool;
+        pub const ItemOut = bool;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
+
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
         pub const BitSet = StaticBitSet(node_count);
-        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(output_dim) else [output_dim]bool;
-        const node_count = output_dim;
-        const ParentIndex = std.math.IntFittingRange(0, input_dim - 1);
+        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
+        const node_count = dim_out;
+        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
         // There are 16 possible logic gates, each one is assigned a probability logit.
         pub const parameter_count: usize = 16 * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
@@ -124,8 +127,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             for (0..node_count) |j| {
                 self.sigma[j] = @intCast(std.mem.indexOfMax(f32, &parameters[j]));
                 self.parents[j] = .{
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
                 };
                 if (options.gateRepresentation == .bitset) {
                     if ((self.sigma[j] >> 3) % 2 == 0) {
@@ -161,8 +164,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
 
             for (0..node_count) |j| {
                 self.parents[j] = .{
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
                 };
                 if (options.gateRepresentation == .bitset) {
                     self.beta0.setValue(j, @round(parameters[j][0]) != 0);
@@ -176,13 +179,6 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
                     self.beta3[j] = @round(parameters[j][3]) % 2 != 0;
                 }
             }
-        }
-
-        pub fn unpack(beta: [4]usize) usize {
-            return if (beta[3] == 0)
-                8 * beta[3] + 4 * beta[2] + 2 * beta[1] + beta[0]
-            else
-                8 * beta[3] + 4 * beta[0] + 2 * beta[1] + beta[2];
         }
 
         pub fn getPermTime(self: *Self) u64 {
@@ -200,8 +196,8 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
             self.sigma = parameters;
             for (0..node_count) |j| {
                 self.parents[j] = .{
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
-                    options.rand.intRangeLessThan(ParentIndex, 0, input_dim),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
                 };
             }
         }
@@ -239,23 +235,189 @@ pub fn Logic(input_dim_: usize, output_dim_: usize, options: LogicOptions) type 
     };
 }
 
-/// Divides the input into output_dim #buckets, each output is the sequential sum of
-/// input_dim / output_dim items of the input.
-pub fn GroupSum(input_dim_: usize, output_dim_: usize, options: LogicOptions) type {
+
+pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
-        pub const input_dim = input_dim_;
-        pub const output_dim = output_dim_;
-        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(input_dim) else [input_dim]bool;
-        pub const Output = [output_dim]usize;
-        pub const parameter_count: usize = 0;
-        pub const parameter_alignment: usize = 8;
+        pub const ItemIn = bool;
+        pub const ItemOut = bool;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
+        pub const BitSet = StaticBitSet(node_count);
+        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
+        const node_count = dim_out;
+        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
+        // There are 16 possible logic gates, each one is assigned a probability logit.
+        pub const parameter_count: usize = 4 * node_count;
+        // For efficient SIMD we ensure that the parameters align to a cacheline.
+        pub const parameter_alignment: usize = 64;
+
+        /// The preprocessed parameters
+        sigma: [node_count]u8 align(64),
+        parents: [node_count][2]ParentIndex,
+        input1: if (options.gateRepresentation == .bitset) BitSet else [node_count]bool,
+        input2: if (options.gateRepresentation == .bitset) BitSet else [node_count]bool,
+        beta0: if (options.gateRepresentation == .bitset) BitSet else [node_count]bool,
+        beta1: if (options.gateRepresentation == .bitset) BitSet else [node_count]bool,
+        beta2: if (options.gateRepresentation == .bitset) BitSet else [node_count]bool,
+        beta3: if (options.gateRepresentation == .bitset) BitSet else [node_count]bool,
+
+        permtime: u64 = 0,
+        evaltime: u64 = 0,
+        const gate = struct {
+            /// Returns the gate applied to a and b
+            pub fn eval(a: bool, b: bool, w: usize) bool {
+                return switch (w) {
+                    0 => false,
+                    1 => a and b,
+                    2 => a and !b,
+                    3 => a,
+                    4 => b and !a,
+                    5 => b,
+                    6 => a and !b or b and !a,
+                    7 => a or b,
+                    8 => true,
+                    9 => !(a and b),
+                    10 => !(a and !b),
+                    11 => !a,
+                    12 => !(b and !a),
+                    13 => !b,
+                    14 => !(a and !b or b and !a),
+                    15 => !(a or b),
+                    else => false,
+                };
+            }
+
+            pub fn evalGate(a: bool, b: bool, beta0: bool, beta1: bool, beta2: bool, beta3: bool) bool {
+                //return (a and ((b and beta0) or (!b and beta1))) or (!a and ((b and beta2) or (!b and beta3)));
+                return (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+            }
+        };
+
+        pub fn evalGates(self: *Self, noalias output: *Output) void {
+            if (options.gateRepresentation == .bitset) {
+                for (0..self.input1.masks.len) |i| {
+                    const a = self.input1.masks[i];
+                    const b = self.input2.masks[i];
+                    const beta0 = self.beta0.masks[i];
+                    const beta1 = self.beta1.masks[i];
+                    const beta2 = self.beta2.masks[i];
+                    const beta3 = self.beta3.masks[i];
+
+                    output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+                }
+            } else {
+                for (0..node_count) |i| {
+                    const a = self.input1[i];
+                    const b = self.input2[i];
+                    const beta0 = self.beta0[i];
+                    const beta1 = self.beta1[i];
+                    const beta2 = self.beta2[i];
+                    const beta3 = self.beta3[i];
+
+                    output[i] = (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3);
+                }
+            }
+        }
+
+        pub fn compile(self: *Self, parameters: *const [node_count][4]f32) void {
+            self.permtime = 0;
+            self.evaltime = 0;
+
+            for (0..node_count) |j| {
+                self.parents[j] = .{
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                };
+                if (options.gateRepresentation == .bitset) {
+                    self.beta0.setValue(j, @round(parameters[j][0]) != 0);
+                    self.beta1.setValue(j, @round(parameters[j][1]) != 0);
+                    self.beta2.setValue(j, @round(parameters[j][2]) != 0);
+                    self.beta3.setValue(j, @round(parameters[j][3]) != 0);
+                } else {
+                    self.beta0[j] = @round(parameters[j][0]) != 0;
+                    self.beta1[j] = @round(parameters[j][1]) != 0;
+                    self.beta2[j] = @round(parameters[j][2]) != 0;
+                    self.beta3[j] = @round(parameters[j][3]) != 0;
+                }
+            }
+        }
+
+        pub fn getPermTime(self: *Self) u64 {
+            return self.permtime;
+        }
+        pub fn getEvalTime(self: *Self) u64 {
+            return self.evaltime;
+        }
+
+        pub fn init(self: *Self, parameters: *[node_count]bool) void {
+            self.* = .{
+                .sigma = null,
+                .parents = undefined,
+            };
+            self.sigma = parameters;
+            for (0..node_count) |j| {
+                self.parents[j] = .{
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                    options.rand.intRangeLessThan(ParentIndex, 0, dim_in),
+                };
+            }
+        }
+
+        pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
+            var permtimer = std.time.Timer.start() catch unreachable;
+            if (options.gateRepresentation == .bitset) {
+                for (0..node_count) |k| {
+                    const a = input.isSet(self.parents[k][0]);
+                    const b = input.isSet(self.parents[k][1]);
+                    self.input1.setValue(k, a);
+                    self.input2.setValue(k, b);
+                }
+            } else {
+                for (0..node_count) |k| {
+                    const a = input[self.parents[k][0]];
+                    const b = input[self.parents[k][1]];
+                    self.input1[k] = a;
+                    self.input2[k] = b;
+                }
+            }
+
+            self.permtime += permtimer.read();
+
+            var evaltimer = std.time.Timer.start() catch unreachable;
+            self.evalGates(output);
+            // if (options.gateRepresentation == .bitset) {
+            //     self.evalGates(output);
+            // } else {
+            //     for (0..node_count) |k| {
+            //         output[k] = gate.eval(self.input1[k], self.input2[k], self.sigma[k]);
+            //     }
+            // }
+            self.evaltime += evaltimer.read();
+        }
+    };
+}
+/// Divides the input into dim_out #buckets, each output is the sequential sum of
+/// dim_in / dim_out items of the input.
+pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
+    return struct {
+        const Self = @This();
+
+        pub const ItemIn = bool;
+        pub const ItemOut = usize;
+        pub const dim_in = dim_in_;
+        pub const dim_out = dim_out_;
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
+        pub const Output = [dim_out]usize;
+        //pub const parameter_count: usize = 0;
+        //pub const parameter_alignment: usize = 8;
 
         pub var permtime: u64 = 0;
         pub var evaltime: u64 = 0;
 
-        const quot = input_dim / output_dim;
-        const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(output_dim)));
+        const quot = dim_in / dim_out;
+        const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(dim_out)));
 
         field: usize = 1,
 
@@ -311,15 +473,23 @@ pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
         pub const ItemOut = bool;
         pub const dim_in = depth_in * height_in * width_in;
         pub const dim_out = depth_out * height_out * width_out;
+
+        pub const Input  = [depth_in][height_in][width_in]bool;
+        pub const Output = [depth_in][lut_count][height_out][width_out]bool;
+        //pub const Output = [depth_out][height_out][width_out]bool;
         pub const parameter_count = depth_in * Ply.parameter_count;
         pub const parameter_alignment = Ply.parameter_alignment;
 
         plies: [depth_in]Ply,
 
+
+        permtime: u64 = 0,
+        evaltime: u64 = 0,
+
         pub fn eval(
             self: *Self,
-            input: *const [depth_in][height_in][width_in]bool,
-            output: *[depth_in][lut_count][height_out][width_out]bool,
+            input: *const Input,
+            noalias output: *Output,
         ) void {
             for (0..depth_in) |ply| {
                 self.plies[ply].eval(&input[ply], &output[ply]);
@@ -328,7 +498,7 @@ pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
 
         pub fn compile(
             self: *Self,
-            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]bool,
+            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
         ) void {
             for (0..depth_in) |ply| self.plies[ply].compile(&parameters[ply]);
         }
@@ -339,6 +509,16 @@ pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
         ) void {
             for (0..depth_in) |ply| self.plies[ply].init(&parameters[ply]);
         }
+
+
+
+        pub fn getPermTime(self: *Self) u64 {
+            return self.permtime;
+        }
+        pub fn getEvalTime(self: *Self) u64 {
+            return self.evaltime;
+        }
+
     };
 }
 
@@ -405,11 +585,11 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         }
         pub fn compile(
             self: *Self,
-            parameters: *[lut_parameter_count][lut_count]bool,
+            parameters: *[lut_parameter_count][lut_count]f32,
         ) void {
             for (0..lut_parameter_count) |i| {
                 for (0..lut_count) |k| {
-                    self.expits[i][k] = if (parameters[i][k] > 0.5) true else false;
+                    self.expits[i][k] = (@round(parameters[i][k]) != 0);
                 }
             }
         }
@@ -435,11 +615,20 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             var max_index: ExpitIndex = 0;
             inline for (0..lut_arity) |j| {
                 const reception = &self.receptions[row][col];
-                max_index |= @as(ExpitIndex, @intFromFloat(@round(reception[j]))) << j;
+                max_index |= @as(ExpitIndex, if(reception[j]) 1 else 0) << j;
             }
-            self.activations[row][col][lut_arity] = max_index;
+            var activation_index: usize = 0;
+            self.activations[row][col][activation_index] = max_index;
             inline for (0..lut_arity) |j| {
-                self.activations[row][col][j] = max_index ^ (1 << j);
+                self.activations[row][col][activation_index] = max_index ^ (1 << j);
+                activation_index += 1;
+            }
+            inline for (0..lut_arity) |j| {
+                inline for (j + 1..lut_arity) |k| {
+                    self.activations[row][col][activation_index] =
+                        max_index ^ ((1 << j) | (1 << k));
+                    activation_index += 1;
+                }
             }
         }
 
@@ -452,10 +641,10 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             inline for (self.activations[row][col]) |index| {
                 var product: bool = true;
                 inline for (self.receptions[row][col], 0..) |x, bit| {
-                    product |= if ((index >> bit) & 1 != 0) x else !x;
+                    product = product and (if ((index >> bit) & 1 != 0) x else !x);
                 }
                 inline for (0..lut_count) |k| {
-                    output[k][row][col] |= self.expits[index][k] & product;
+                    output[k][row][col] = (output[k][row][col] or (self.expits[index][k] and product)) and (!output[k][row][col] or !(self.expits[index][k] and product));
                 }
             }
         }
@@ -465,9 +654,8 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             input: *const [height_in][width_in]bool,
             output: *[lut_count][height_out][width_out]bool,
         ) void {
-            @setFloatMode(.optimized);
             // Collect receptions and find the activated indices.
-            output.* = @splat(@splat(@splat(0)));
+            output.* = @splat(@splat(@splat(false)));
             for (0..height_out) |row| {
                 for (0..width_out) |col| {
                     const receptions = &self.receptions[row][col];
