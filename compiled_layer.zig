@@ -268,3 +268,216 @@ pub fn GroupSum(input_dim_: usize, output_dim_: usize, options: LogicOptions) ty
         }
     };
 }
+
+pub const LUTConvolutionPliesOptions = struct {
+    depth: usize,
+    height: usize,
+    width: usize,
+    lut_count: usize,
+    field_size: struct { height: usize, width: usize },
+    stride: struct { row: usize, col: usize },
+};
+
+pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
+    return struct {
+        const Self = @This();
+
+        // Unpack options.
+        const depth_in = options.depth;
+        const height_in = options.height;
+        const width_in = options.width;
+        const lut_count = options.lut_count;
+        const field_size = options.field_size;
+        const stride = options.stride;
+
+        const Ply = LUTConvolution(.{
+            .height = height_in,
+            .width = width_in,
+            .lut_count = lut_count,
+            .field_size = .{ .height = field_size.height, .width = field_size.width },
+            .stride = .{ .row = stride.row, .col = stride.col },
+        });
+        const depth_out = depth_in * lut_count;
+        const height_out = Ply.height_out;
+        const width_out = Ply.width_out;
+
+        pub const ItemIn = bool;
+        pub const ItemOut = bool;
+        pub const dim_in = depth_in * height_in * width_in;
+        pub const dim_out = depth_out * height_out * width_out;
+        pub const parameter_count = depth_in * Ply.parameter_count;
+        pub const parameter_alignment = Ply.parameter_alignment;
+
+        plies: [depth_in]Ply,
+
+        pub fn eval(
+            self: *Self,
+            input: *const [depth_in][height_in][width_in]bool,
+            output: *[depth_in][lut_count][height_out][width_out]bool,
+        ) void {
+            for (0..depth_in) |ply| {
+                self.plies[ply].eval(&input[ply], &output[ply]);
+            }
+        }
+
+        pub fn compile(
+            self: *Self,
+            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]bool,
+        ) void {
+            for (0..depth_in) |ply| self.plies[ply].compile(&parameters[ply]);
+        }
+
+        pub fn init(
+            self: *Self,
+            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]bool,
+        ) void {
+            for (0..depth_in) |ply| self.plies[ply].init(&parameters[ply]);
+        }
+    };
+}
+
+pub const LUTConvolutionOptions = struct {
+    height: usize,
+    width: usize,
+    lut_count: usize,
+    field_size: struct { height: usize, width: usize },
+    stride: struct { row: usize, col: usize },
+};
+
+pub fn LUTConvolution(options: LUTConvolutionOptions) type {
+    return struct {
+        const Self = @This();
+
+        // Unpack options.
+        const stride = options.stride;
+        const height_in = options.height;
+        const width_in = options.width;
+        const lut_count = options.lut_count;
+        const field_height = options.field_size.height;
+        const field_width = options.field_size.width;
+        const lut_arity = field_height * field_width;
+        pub const lut_parameter_count = 1 << lut_arity;
+        comptime {
+            assert(field_height > 0);
+            assert(field_width > 0);
+            assert(lut_count > 0);
+            assert(height_in >= field_height);
+            assert(width_in >= field_width);
+            assert((height_in - field_height) % stride.row == 0);
+            assert((width_in - field_width) % stride.col == 0);
+        }
+        const height_out = (height_in - field_height) / stride.row + 1;
+        const width_out = (width_in - field_width) / stride.col + 1;
+
+        const ArgumentIndex = std.math.IntFittingRange(0, lut_arity);
+        const ExpitIndex = std.math.IntFittingRange(0, lut_parameter_count - 1);
+
+        pub const ItemIn = bool;
+        pub const ItemOut = bool;
+        pub const dim_in = height_in * width_in;
+        pub const dim_out = height_out * width_out * lut_count;
+        pub const parameter_count = lut_count * lut_parameter_count;
+        pub const parameter_alignment = 64;
+
+        // The lookup tables are stored in column major order, this is because we evaluate
+        // all lookup tables given a certain input.
+        expits: [lut_parameter_count][lut_count]bool,
+        activations: [height_in][width_in][lut_arity + 1]ExpitIndex,
+        receptions: [height_out][width_out][lut_arity]bool,
+
+        pub fn init(_: *Self, parameters: *[lut_parameter_count][lut_count]bool) void {
+            for (0..lut_parameter_count / 2) |i| {
+                for (0..lut_count) |k| {
+                    parameters[i][k] = true;
+                }
+            }
+            for (lut_parameter_count / 2..lut_parameter_count) |i| {
+                for (0..lut_count) |k| {
+                    parameters[i][k] = false;
+                }
+            }
+        }
+        pub fn compile(
+            self: *Self,
+            parameters: *[lut_parameter_count][lut_count]bool,
+        ) void {
+            for (0..lut_parameter_count) |i| {
+                for (0..lut_count) |k| {
+                    self.expits[i][k] = if (parameters[i][k] > 0.5) true else false;
+                }
+            }
+        }
+
+        const Point = @Vector(2, usize);
+        const receptive_offsets = blk: {
+            var offsets: [lut_arity]Point = undefined;
+            var i: usize = 0;
+            for (0..field_height) |row| {
+                for (0..field_width) |col| {
+                    offsets[i] = Point{ row, col };
+                    i += 1;
+                }
+            }
+            break :blk offsets;
+        };
+
+        fn findActivations(
+            self: *Self,
+            row: usize,
+            col: usize,
+        ) void {
+            var max_index: ExpitIndex = 0;
+            inline for (0..lut_arity) |j| {
+                const reception = &self.receptions[row][col];
+                max_index |= @as(ExpitIndex, @intFromFloat(@round(reception[j]))) << j;
+            }
+            self.activations[row][col][lut_arity] = max_index;
+            inline for (0..lut_arity) |j| {
+                self.activations[row][col][j] = max_index ^ (1 << j);
+            }
+        }
+
+        fn evalLUTs(
+            self: *Self,
+            row: usize,
+            col: usize,
+            output: *[lut_count][height_out][width_out]bool,
+        ) void {
+            inline for (self.activations[row][col]) |index| {
+                var product: bool = true;
+                inline for (self.receptions[row][col], 0..) |x, bit| {
+                    product |= if ((index >> bit) & 1 != 0) x else !x;
+                }
+                inline for (0..lut_count) |k| {
+                    output[k][row][col] |= self.expits[index][k] & product;
+                }
+            }
+        }
+
+        pub fn eval(
+            self: *Self,
+            input: *const [height_in][width_in]bool,
+            output: *[lut_count][height_out][width_out]bool,
+        ) void {
+            @setFloatMode(.optimized);
+            // Collect receptions and find the activated indices.
+            output.* = @splat(@splat(@splat(0)));
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    const receptions = &self.receptions[row][col];
+                    const top_left = Point{ row * stride.row, col * stride.col };
+                    inline for (receptions, receptive_offsets) |*reception, offset| {
+                        const point = top_left + offset;
+                        reception.* = input[point[0]][point[1]];
+                    }
+                    self.findActivations(row, col);
+                }
+            }
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    self.evalLUTs(row, col, output);
+                }
+            }
+        }
+    };
+}
