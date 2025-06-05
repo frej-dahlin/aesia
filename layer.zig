@@ -286,7 +286,7 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
         pub const parameter_alignment: usize = 64;
 
         const node_count = dim_out;
-        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
+        const ParentIndex = std.math.IntFittingRange(0, dim_in);
 
         // Note: Do not try to be clever with SIMD operations, the compiler does a great
         // job with the following functions.
@@ -304,21 +304,13 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
             // The derivative of the logic gate with respect to its first variable.
             pub fn aDiff(beta: f32x4, b: f32) f32 {
                 @setFloatMode(.optimized);
-                const x = b * beta[0];
-                const y = (1 - b) * beta[1];
-                const z = -b * beta[2];
-                const w = -(1 - b) * beta[3];
-                return x + y + z + w; // -
+                return b * (beta[0] - beta[2]) + (1 - b) * (beta[1] - beta[3]);
             }
 
             // The derivative of the logic gate with respect to its second variable.
             pub fn bDiff(beta: f32x4, a: f32) f32 {
                 @setFloatMode(.optimized);
-                const x = a * beta[0];
-                const y = -a * beta[1];
-                const z = (1 - a) * beta[2];
-                const w = -(1 - a) * beta[3];
-                return x + y + z + w;
+                return a * (beta[0] - beta[1]) + (1 - a) * (beta[2] - beta[3]);
             }
 
             // The gradient of the logic gate with respect to its underlying logits.
@@ -418,6 +410,22 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
             }
         }
 
+        /// Computes the cost gradient and the gradient with respect to the previous layer's
+        /// activations.
+        pub fn backwardPassFinal(
+            noalias self: *Self,
+            noalias input: *const [dim_out]f32,
+            noalias cost_gradient: *[node_count]f32x4,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..node_count) |j| {
+                const a, const b = self.arguments[j];
+                const beta = self.beta[j];
+                cost_gradient[j] += packed_gate.gradient(beta, a, b) *
+                    @as(f32x4, @splat(input[j]));
+            }
+        }
+
         /// Copies parameters as logits and preprocesses them through the logistic function.
         pub fn takeParameters(self: *Self, parameters: *[node_count]f32x4) void {
             @setFloatMode(.optimized);
@@ -468,6 +476,555 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize) type {
     };
 }
 
+pub const LUTConvolutionPliesOptions = struct {
+    depth: usize,
+    height: usize,
+    width: usize,
+    lut_count: usize,
+    field_size: struct { height: usize, width: usize },
+    stride: struct { row: usize, col: usize },
+};
+
+pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
+    return struct {
+        const Self = @This();
+
+        // Unpack options.
+        const depth_in = options.depth;
+        const height_in = options.height;
+        const width_in = options.width;
+        const lut_count = options.lut_count;
+        const field_size = options.field_size;
+        const stride = options.stride;
+
+        const Ply = LUTConvolution(.{
+            .height = height_in,
+            .width = width_in,
+            .lut_count = lut_count,
+            .field_size = .{ .height = field_size.height, .width = field_size.width },
+            .stride = .{ .row = stride.row, .col = stride.col },
+        });
+        const depth_out = depth_in * lut_count;
+        const height_out = Ply.height_out;
+        const width_out = Ply.width_out;
+
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = depth_in * height_in * width_in;
+        pub const dim_out = depth_out * height_out * width_out;
+        pub const parameter_count = depth_in * Ply.parameter_count;
+        pub const parameter_alignment = Ply.parameter_alignment;
+
+        plies: [depth_in]Ply,
+
+        pub fn eval(
+            self: *Self,
+            input: *const [depth_in][height_in][width_in]f32,
+            output: *[depth_in][lut_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].eval(&input[ply], &output[ply]);
+            }
+        }
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [depth_in][height_in][width_in]f32,
+            output: *[depth_in][lut_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            return self.eval(input, output);
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            activation_delta: *const [depth_in][lut_count][height_out][width_out]f32,
+            cost_gradient: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+            argument_delta: *[depth_in][height_in][width_in]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].backwardPass(
+                    &activation_delta[ply],
+                    &cost_gradient[ply],
+                    &argument_delta[ply],
+                );
+            }
+        }
+
+        pub fn backwardPassFinal(
+            self: *Self,
+            activation_delta: *const [depth_in][lut_count][height_out][width_out]f32,
+            cost_gradient: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].backwardPassFinal(
+                    &activation_delta[ply],
+                    &cost_gradient[ply],
+                );
+            }
+        }
+
+        pub fn init(
+            self: *Self,
+            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+        ) void {
+            for (0..depth_in) |ply| self.plies[ply].init(&parameters[ply]);
+        }
+
+        pub fn takeParameters(
+            self: *Self,
+            parameters: *[depth_in][Ply.lut_parameter_count][Ply.lut_count]f32,
+        ) void {
+            for (0..depth_in) |ply| self.plies[ply].takeParameters(&parameters[ply]);
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+    };
+}
+
+pub const LUTConvolutionOptions = struct {
+    height: usize,
+    width: usize,
+    lut_count: usize,
+    field_size: struct { height: usize, width: usize },
+    stride: struct { row: usize, col: usize },
+};
+
+pub fn LUTConvolution(options: LUTConvolutionOptions) type {
+    return struct {
+        const Self = @This();
+
+        // Unpack options.
+        const stride = options.stride;
+        const height_in = options.height;
+        const width_in = options.width;
+        const lut_count = options.lut_count;
+        const field_height = options.field_size.height;
+        const field_width = options.field_size.width;
+        const lut_arity = field_height * field_width;
+        pub const lut_parameter_count = 1 << lut_arity;
+        comptime {
+            assert(field_height > 0);
+            assert(field_width > 0);
+            assert(lut_count > 0);
+            assert(height_in >= field_height);
+            assert(width_in >= field_width);
+            assert((height_in - field_height) % stride.row == 0);
+            assert((width_in - field_width) % stride.col == 0);
+        }
+        const height_out = (height_in - field_height) / stride.row + 1;
+        const width_out = (width_in - field_width) / stride.col + 1;
+
+        const ArgumentIndex = std.math.IntFittingRange(0, lut_arity);
+        const ExpitIndex = std.math.IntFittingRange(0, lut_parameter_count - 1);
+
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = height_in * width_in;
+        pub const dim_out = height_out * width_out * lut_count;
+        pub const parameter_count = lut_count * lut_parameter_count;
+        pub const parameter_alignment = 64;
+
+        // The lookup tables are stored in column major order, this is because we evaluate
+        // all lookup tables given a certain input.
+        expits: [lut_parameter_count][lut_count]f32,
+        activations: [height_in][width_in][lut_arity * (lut_arity - 1) / 2 + lut_arity + 1]ExpitIndex,
+        receptions: [height_out][width_out][lut_arity]f32,
+
+        pub fn init(_: *Self, parameters: *[lut_parameter_count][lut_count]f32) void {
+            for (0..lut_parameter_count / 2) |i| {
+                for (0..lut_count) |k| {
+                    parameters[i][k] = 1;
+                }
+            }
+            for (lut_parameter_count / 2..lut_parameter_count) |i| {
+                for (0..lut_count) |k| {
+                    parameters[i][k] = 0;
+                }
+            }
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *[lut_parameter_count][lut_count]f32) void {
+            for (0..lut_parameter_count) |i| {
+                for (0..lut_count) |k| {
+                    self.expits[i][k] = 1 / (1 + @exp(-parameters[i][k]));
+                }
+            }
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+
+        const Point = @Vector(2, usize);
+        const receptive_offsets = blk: {
+            var offsets: [lut_arity]Point = undefined;
+            var i: usize = 0;
+            for (0..field_height) |row| {
+                for (0..field_width) |col| {
+                    offsets[i] = Point{ row, col };
+                    i += 1;
+                }
+            }
+            break :blk offsets;
+        };
+
+        fn findActivations(
+            self: *Self,
+            row: usize,
+            col: usize,
+        ) void {
+            var max_index: ExpitIndex = 0;
+            inline for (0..lut_arity) |j| {
+                const reception = &self.receptions[row][col];
+                max_index |= @as(ExpitIndex, @intFromFloat(@round(reception[j]))) << j;
+            }
+            var activation_index: usize = 0;
+            self.activations[row][col][activation_index] = max_index;
+            activation_index += 1;
+            inline for (0..lut_arity) |j| {
+                self.activations[row][col][activation_index] = max_index ^ (1 << j);
+                activation_index += 1;
+            }
+            inline for (0..lut_arity) |j| {
+                inline for (j + 1..lut_arity) |k| {
+                    self.activations[row][col][activation_index] =
+                        max_index ^ ((1 << j) | (1 << k));
+                    activation_index += 1;
+                }
+            }
+        }
+
+        fn evalLUTs(
+            self: *Self,
+            row: usize,
+            col: usize,
+            output: *[lut_count][height_out][width_out]f32,
+        ) void {
+            @setEvalBranchQuota(1000 * lut_arity * lut_count * lut_count);
+            inline for (self.activations[row][col]) |index| {
+                // inline for (0..1 << lut_arity) |index| {
+                var product: f32 = 1;
+                inline for (self.receptions[row][col], 0..) |x, bit| {
+                    product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                }
+                inline for (0..lut_count) |k| {
+                    output[k][row][col] += self.expits[index][k] * product;
+                }
+            }
+        }
+
+        fn backwardPassFinalLUTs(
+            self: *Self,
+            row: usize,
+            col: usize,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+        ) void {
+            const reception = &self.receptions[row][col];
+            const activation = &self.activations[row][col];
+            @setEvalBranchQuota(100 * lut_count * lut_arity * lut_arity);
+            inline for (activation) |index| {
+                // for (0..1 << lut_arity) |index| {
+                var product: f32 = 1;
+                inline for (reception, 0..) |x, bit| {
+                    product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                }
+                inline for (0..lut_count) |k| {
+                    const expit = self.expits[index][k];
+                    cost_gradient[index][k] += activation_delta[k][row][col] * product * expit * (1 - expit);
+                }
+            }
+        }
+
+        fn backwardPassLUTs(
+            self: *Self,
+            row: usize,
+            col: usize,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+            argument_delta: *[lut_arity]f32,
+        ) void {
+            @memset(argument_delta, 0);
+            const reception = &self.receptions[row][col];
+            const activation = &self.activations[row][col];
+            @setEvalBranchQuota(100 * lut_count * lut_arity * lut_arity);
+            inline for (activation) |index| {
+                // inline for (0..1 << lut_arity) |index| {
+                var product: f32 = 1;
+                inline for (reception, 0..) |x, bit| {
+                    product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                }
+                inline for (0..lut_count) |k| {
+                    const expit = self.expits[index][k];
+                    cost_gradient[index][k] += activation_delta[k][row][col] * product * expit * (1 - expit);
+                }
+            }
+            @setEvalBranchQuota(1000 * lut_count * lut_arity * lut_arity);
+            inline for (0..lut_arity) |j| {
+                inline for (activation) |index| {
+                    // inline for (0..1 << lut_arity) |index| {
+                    var product: f32 = 1;
+                    inline for (reception, 0..) |x, bit| {
+                        if (comptime bit == j) {
+                            product *= if ((index >> bit) & 1 != 0) 1 else -1;
+                        } else {
+                            product *= if ((index >> bit) & 1 != 0) x else 1 - x;
+                        }
+                    }
+                    inline for (0..lut_count) |k| {
+                        const expit = self.expits[index][k];
+                        argument_delta[j] += activation_delta[k][row][col] * product * expit;
+                    }
+                }
+            }
+        }
+
+        pub fn eval(
+            self: *Self,
+            input: *const [height_in][width_in]f32,
+            output: *[lut_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            // Collect receptions and find the activated indices.
+            output.* = @splat(@splat(@splat(0)));
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    const receptions = &self.receptions[row][col];
+                    const top_left = Point{ row * stride.row, col * stride.col };
+                    inline for (receptions, receptive_offsets) |*reception, offset| {
+                        const point = top_left + offset;
+                        reception.* = input[point[0]][point[1]];
+                    }
+                    self.findActivations(row, col);
+                }
+            }
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    self.evalLUTs(row, col, output);
+                }
+            }
+        }
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [height_in][width_in]f32,
+            output: *[height_out][width_out][lut_count]f32,
+        ) void {
+            return self.eval(input, output);
+        }
+
+        pub fn backwardPassFinal(
+            self: *Self,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+        ) void {
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    self.backwardPassFinalLUTs(
+                        row,
+                        col,
+                        activation_delta,
+                        cost_gradient,
+                    );
+                }
+            }
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            activation_delta: *const [lut_count][height_out][width_out]f32,
+            cost_gradient: *[lut_parameter_count][lut_count]f32,
+            argument_delta: *[height_in][width_in]f32,
+        ) void {
+            var argument_delta_buffer: [lut_arity]f32 = undefined;
+            for (0..height_out) |row| {
+                for (0..width_out) |col| {
+                    self.backwardPassLUTs(
+                        row,
+                        col,
+                        activation_delta,
+                        cost_gradient,
+                        &argument_delta_buffer,
+                    );
+                    const top_left = Point{ row * stride.row, col * stride.col };
+                    inline for (receptive_offsets, argument_delta_buffer) |offset, delta| {
+                        const point = top_left + offset;
+                        argument_delta[point[0]][point[1]] += delta;
+                    }
+                }
+            }
+        }
+    };
+}
+
+pub const ConvolutionLogicOptions = struct {
+    depth: usize,
+    height: usize,
+    width: usize,
+    kernel_count: usize,
+    kernel_size: struct { height: usize, width: usize },
+    stride: struct { row: usize, col: usize },
+};
+
+pub fn ConvolutionLogic(options: ConvolutionLogicOptions) type {
+    return struct {
+        const Self = @This();
+
+        // Unpack options.
+        const depth_in = options.depth;
+        const height_in = options.height;
+        const width_in = options.width;
+        const kernel_count = options.kernel_count;
+        const kernel_size = options.kernel_size;
+        const stride = options.stride;
+
+        const Ply = ConvolutionLogicKernels(.{
+            .height = height_in,
+            .width = width_in,
+            .kernel_count = kernel_count,
+            .kernel_size = .{ .height = kernel_size.height, .width = kernel_size.width },
+            .stride = .{ .row = stride.row, .col = stride.col },
+        });
+        const depth_out = depth_in * kernel_count;
+        const height_out = Ply.height_out;
+        const width_out = Ply.width_out;
+        const KernelParameters = Ply.KernelParameters;
+
+        pub const ItemIn = f32;
+        pub const ItemOut = f32;
+        pub const dim_in = depth_in * height_in * width_in;
+        pub const dim_out = depth_out * height_out * width_out;
+        pub const parameter_count = depth_in * Ply.parameter_count;
+        pub const parameter_alignment = Ply.parameter_alignment;
+
+        plies: [depth_in]Ply,
+
+        pub fn eval(
+            self: *Self,
+            input: *const [depth_in][height_in][width_in]f32,
+            output: *[depth_in][kernel_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].eval(&input[ply], &output[ply]);
+            }
+        }
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [depth_in][height_in][width_in]f32,
+            output: *[depth_in][kernel_count][height_out][width_out]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            return self.eval(input, output);
+        }
+
+        pub fn backwardPass(
+            self: *Self,
+            activation_delta: *const [depth_in][kernel_count][height_out][width_out]f32,
+            cost_gradient: *[depth_in][kernel_count]KernelParameters,
+            argument_delta: *[depth_in][height_in][width_in]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..depth_in) |ply| {
+                self.plies[ply].backwardPass(
+                    &activation_delta[ply],
+                    &cost_gradient[ply],
+                    &argument_delta[ply],
+                );
+            }
+        }
+
+        pub fn init(self: *Self, parameters: *[depth_in][kernel_count]KernelParameters) void {
+            for (0..depth_in) |ply| self.plies[ply].init(&parameters[ply]);
+        }
+
+        pub fn takeParameters(
+            self: *Self,
+            parameters: *[depth_in][kernel_count]KernelParameters,
+        ) void {
+            for (0..depth_in) |ply| self.plies[ply].takeParameters(&parameters[ply]);
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+    };
+}
+
+fn MultiGate(arity: usize) type {
+    return struct {
+        const Self = @This();
+
+        const tolerance = 0.25;
+
+        const beta_len = 1 << arity;
+        const Beta = @Vector(beta_len, f32);
+        const ArgumentVector = @Vector(arity, f32);
+        const ParameterIndex = std.math.IntFittingRange(0, beta_len - 1);
+        const ArgumentIndex = std.math.IntFittingRange(0, arity);
+
+        beta: Beta,
+
+        // Evaluates the packed differentiable logic gate.
+        pub fn eval(gate: *const Self, input: *const [arity]f32) f32 {
+            @setFloatMode(.optimized);
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            var result: f32 = 0;
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            inline for (0..beta_len) |i| {
+                var product = gate.beta[i];
+                inline for (input, 0..) |x, bit| {
+                    product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
+                }
+                result += product;
+            }
+            return result;
+        }
+
+        pub fn argumentGradient(gate: *const Self, input: *const [arity]f32) ArgumentVector {
+            @setFloatMode(.optimized);
+            var result: ArgumentVector = @splat(0);
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            inline for (0..arity) |j| {
+                inline for (0..beta_len) |i| {
+                    var product = gate.beta[i];
+                    inline for (input, 0..) |x, bit| {
+                        if (comptime bit != j) {
+                            product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
+                        } else {
+                            product *= if (comptime (1 << bit) & i != 0) 1 else -1;
+                        }
+                    }
+                    result[j] += product;
+                }
+            }
+            @setFloatMode(.optimized);
+            return result;
+        }
+
+        pub fn parameterGradient(
+            gate: *const Self,
+            input: *const [arity]f32,
+        ) Beta {
+            @setFloatMode(.optimized);
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            @setFloatMode(.optimized);
+            var result: Beta = @splat(0);
+            @setEvalBranchQuota(4 * beta_len * arity * arity);
+            inline for (0..beta_len) |i| {
+                var product = gate.beta[i] * (1 - gate.beta[i]);
+                inline for (input, 0..) |x, bit| {
+                    product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
+                }
+                result[i] = product;
+            }
+            @setFloatMode(.optimized);
+            return result;
+        }
+    };
+}
+
 pub const MultiLogicOptions = struct {
     arity: usize,
     rand: *std.Random,
@@ -487,7 +1044,7 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
         pub const parameter_alignment: usize = @max(64, @alignOf(ParameterVector));
 
         const node_count = dim_out;
-        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
+        const ParentIndex = std.math.IntFittingRange(0, dim_in);
         const arity = options.arity;
         const parameter_vector_len = 1 << arity;
         const ParameterVector = @Vector(parameter_vector_len, f32);
@@ -503,13 +1060,14 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
                 inline for (0..parameter_vector_len) |i| {
                     var product: f32 = gate.sigma[i];
                     inline for (input, 0..) |x, bit| {
-                        product *= if ((1 << bit) & i != 0) x else (1 - x);
+                        product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
                     }
                     result += product;
                 }
                 return result;
             }
 
+            // Optimization: Use greycode.
             pub fn diff(gate: *const Gate, input: *const [arity]f32) ArgumentVector {
                 @setFloatMode(.optimized);
                 var result: ArgumentVector = @splat(0);
@@ -518,10 +1076,10 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
                     inline for (0..parameter_vector_len) |i| {
                         var product: f32 = gate.sigma[i];
                         inline for (input, 0..) |x, bit| {
-                            if (bit != j) {
-                                product *= if ((1 << bit) & i != 0) x else (1 - x);
+                            if (comptime bit != j) {
+                                product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
                             } else {
-                                product *= if ((1 << bit) & i != 0) 1 else -1;
+                                product *= if (comptime (1 << bit) & i != 0) 1 else -1;
                             }
                         }
                         result[j] += product;
@@ -537,7 +1095,7 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
                 inline for (0..parameter_vector_len) |j| {
                     var product: f32 = (1 - gate.sigma[j]) * gate.sigma[j];
                     inline for (input, 0..) |x, bit| {
-                        product *= if ((1 << bit) & j != 0) x else (1 - x);
+                        product *= if (comptime (1 << bit) & j != 0) x else (1 - x);
                     }
                     result[j] = product;
                 }
@@ -549,7 +1107,7 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
 
         gates: [node_count]Gate align(parameter_alignment),
         inputs: [node_count][arity]f32,
-        parents: [node_count][arity]std.math.IntFittingRange(0, dim_in - 1),
+        parents: [node_count][arity]ParentIndex,
         max_index: [node_count]ArgumentIndex,
 
         fn logistic(x: ParameterVector) ParameterVector {
@@ -606,8 +1164,6 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
             }
         }
 
-        /// Fixme: Create a function "backwardPassFirst" that does not pass delta backwards,
-        ///  applicable for the first layer in a network only.
         pub fn backwardPass(
             noalias self: *Self,
             noalias input: *const [dim_out]f32,
@@ -627,6 +1183,19 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
             }
         }
 
+        pub fn backwardPassFinal(
+            noalias self: *Self,
+            noalias input: *const [dim_out]f32,
+            noalias cost_gradient: *[node_count]ParameterVector,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..node_count) |j| {
+                const gate = &self.gates[j];
+                cost_gradient[j] += gate.gradient(&self.inputs[j]) *
+                    @as(ParameterVector, @splat(input[j]));
+            }
+        }
+
         pub fn takeParameters(self: *Self, parameters: *[node_count]ParameterVector) void {
             @setFloatMode(.optimized);
             for (0..node_count) |j| self.gates[j].sigma = logistic(parameters[j]);
@@ -637,205 +1206,3 @@ pub fn MultiLogicGate(dim_in_: usize, dim_out_: usize, options: MultiLogicOption
         }
     };
 }
-
-pub fn MultiLogicMax(dim_in_: usize, dim_out_: usize, options: MultiLogicOptions) type {
-    return struct {
-        const Self = @This();
-
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = dim_in_;
-        pub const dim_out = dim_out_;
-
-        const node_count = dim_out;
-        const arity = options.arity;
-        const vector_len = 1 << arity;
-        const Vector = @Vector(vector_len, f32);
-        const ParameterIndex = std.math.IntFittingRange(0, vector_len - 1);
-        const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
-
-        pub const parameter_count = vector_len * node_count;
-        // For efficient SIMD we ensure that the parameters align to a cacheline.
-        pub const parameter_alignment: usize = @max(64, @alignOf(Vector));
-
-        const EvalResult = struct {
-            value: f32,
-            index: ParameterIndex,
-        };
-        const Gate = struct {
-            sigma: Vector,
-            // Evaluates the packed differentiable logic gate.
-            pub fn eval(gate: *const Gate, input: *const [arity]f32) EvalResult {
-                @setFloatMode(.optimized);
-                var value: f32 = 0;
-                var max: f32 = 0;
-                var index: ParameterIndex = 0;
-                @setEvalBranchQuota(4 * vector_len * arity * arity);
-                inline for (0..vector_len) |i| {
-                    var product: f32 = gate.sigma[i];
-                    inline for (input, 0..) |x, bit| {
-                        product *= if (comptime (1 << bit) & i != 0) x else (1 - x);
-                    }
-                    value += product;
-                    max = @max(max, product);
-                    if (max == product) index = @truncate(i);
-                }
-                return .{
-                    .value = value,
-                    .index = index,
-                };
-            }
-
-            const ArgumentVector = @Vector(arity, f32);
-            pub fn diff(
-                gate: *const Gate,
-                input: *const [arity]f32,
-                index: ParameterIndex,
-            ) ArgumentVector {
-                @setFloatMode(.optimized);
-                var result: ArgumentVector = @splat(0);
-                @setEvalBranchQuota(4 * vector_len * arity * arity);
-                inline for (0..arity) |j| {
-                    var product: f32 = gate.sigma[index];
-                    inline for (input, 0..) |x, bit| {
-                        if (comptime bit != j) {
-                            product *= if ((1 << bit) & index != 0) x else (1 - x);
-                        } else {
-                            product *= if ((1 << bit) & index != 0) 1 else -1;
-                        }
-                    }
-                    result[j] += product;
-                }
-                return result;
-            }
-
-            pub fn gradient(
-                gate: *const Gate,
-                input: *const [arity]f32,
-                index: ParameterIndex,
-            ) f32 {
-                @setFloatMode(.optimized);
-                @setEvalBranchQuota(4 * vector_len * arity * arity);
-                var product: f32 = (1 - gate.sigma[index]) * gate.sigma[index];
-                inline for (input, 0..) |x, bit| {
-                    product *= if ((1 << bit) & index != 0) x else (1 - x);
-                }
-                return product;
-            }
-        };
-
-        const ArgumentIndex = std.math.IntFittingRange(0, vector_len - 1);
-
-        gates: [node_count]Gate align(parameter_alignment),
-        inputs: [node_count][arity]f32,
-        parents: [node_count][arity]std.math.IntFittingRange(0, dim_in - 1),
-        max_index: [node_count]ArgumentIndex,
-
-        fn logistic(x: Vector) Vector {
-            @setFloatMode(.optimized);
-            return @as(Vector, @splat(1)) / (@as(Vector, @splat(1)) + @exp(-x));
-        }
-
-        pub fn init(self: *Self, parameters: *[parameter_count]f32) void {
-            parameters.* = @bitCast(@as(
-                [node_count]Vector,
-                @splat(.{1} ** (vector_len / 2) ++ .{0} ** (vector_len / 2)),
-            ));
-            self.* = undefined;
-            for (0..node_count) |j| {
-                inline for (&self.parents[j]) |*parent| {
-                    parent.* = options.rand.intRangeLessThan(ParentIndex, 0, dim_in);
-                }
-            }
-        }
-
-        pub fn eval(
-            noalias self: *Self,
-            noalias input: *const [dim_in]ItemIn,
-            noalias output: *[dim_out]ItemOut,
-        ) void {
-            @setFloatMode(.optimized);
-            for (0..node_count) |j| {
-                inline for (self.parents[j], &self.inputs[j]) |parent, *gate_input| {
-                    gate_input.* = input[parent];
-                }
-            }
-            for (0..node_count) |j| {
-                const result = self.gates[j].eval(&self.inputs[j]);
-                output[j] = result.value;
-            }
-        }
-
-        pub fn forwardPass(
-            noalias self: *Self,
-            noalias input: *const [dim_in]ItemIn,
-            noalias output: *[dim_out]ItemOut,
-        ) void {
-            @setFloatMode(.optimized);
-            // For some reason it is faster to to a simple loop rather than a multi item one.
-            // I found needless memcpy calls with callgrind.
-            // It is also faster to split the loop into two parts, my guess is that
-            // the first one trashes the cache and the bottom one is vectorized by the compiler.
-            for (0..node_count) |j| {
-                inline for (self.parents[j], &self.inputs[j]) |parent, *gate_input| {
-                    gate_input.* = input[parent];
-                }
-            }
-            for (0..node_count) |j| {
-                const result = self.gates[j].eval(&self.inputs[j]);
-                output[j] = result.value;
-                self.max_index[j] = result.index;
-            }
-        }
-
-        /// Fixme: Create a function "backwardPassFirst" that does not pass delta backwards,
-        ///  applicable for the first layer in a network only.
-        pub fn backwardPass(
-            noalias self: *Self,
-            noalias input: *const [dim_out]f32,
-            noalias cost_gradient: *[node_count]Vector,
-            noalias output: *[dim_in]f32,
-        ) void {
-            @setFloatMode(.optimized);
-            @memset(output, 0);
-            for (0..node_count) |j| {
-                const gate = &self.gates[j];
-                cost_gradient[j][self.max_index[j]] += gate.gradient(
-                    &self.inputs[j],
-                    self.max_index[j],
-                ) * input[j];
-                const argument_gradient = gate.diff(&self.inputs[j], self.max_index[j]);
-                inline for (self.parents[j], 0..) |parent, k| {
-                    output[parent] += argument_gradient[k] * input[j];
-                }
-            }
-        }
-
-        pub fn takeParameters(self: *Self, parameters: *[node_count]Vector) void {
-            @setFloatMode(.optimized);
-            for (0..node_count) |j| self.gates[j].sigma = logistic(parameters[j]);
-        }
-
-        pub fn giveParameters(self: *Self) void {
-            _ = self;
-        }
-    };
-}
-
-// pub fn ConvolutionLogic(depth: usize, height: usize, width: usize) type {
-//     return struct {
-//         const Self = @This();
-
-//         pub const InputElement = f32;
-//         pub const OutputElement = f32;
-//         pub const dim_in = depth * height * width;
-//         pub const dim_out = depth * height * width;
-//         pub const parameter_count = 1 << 9;
-
-//         pub fn eval(
-//             self: *const Self,
-//             input: *const [depth][height][width]f32,
-//             output: *[depth][height][width]f32,
-//         ) void {}
-//     };
-// }

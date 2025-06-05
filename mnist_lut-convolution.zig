@@ -67,7 +67,6 @@ const GroupSum = aesia.layer.GroupSum;
 const MaxPool = aesia.layer.MaxPool;
 const LUTConvolution = aesia.layer.LUTConvolutionPlies;
 const ButterflyMap = @import("dyadic_butterfly.zig").ButterflyMap;
-const ZeroPad = @import("pad.zig").ZeroPad;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
@@ -106,63 +105,15 @@ const Model = aesia.Model(&.{
         .field_size = .{ .height = 2, .width = 2 },
         .stride = .{ .row = 2, .col = 2 },
     }),
-    ZeroPad(16 * model_scale * 3 * 3, 4096),
-    ButterflyMap(12, 11),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 0),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 11),
-    MultiLogicGate(4096, 4096, .{ .arity = 4, .rand = &rand }),
-    ButterflyMap(12, 11),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 0),
-    MultiLogicGate(4096, 4096, .{ .arity = 4, .rand = &rand }),
-    ButterflyMap(12, 0),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 11),
-    MultiLogicGate(4096, 4096, .{ .arity = 4, .rand = &rand }),
-    GroupSum(4096, 10),
+    LogicLayer(16 * model_scale * 3 * 3, 32_000, .{ .rand = &rand }),
+    LogicLayer(32_000, 16_000, .{ .rand = &rand }),
+    LogicLayer(16_000, 8_000, .{ .rand = &rand }),
+    GroupSum(8000, 10),
 }, .{
     .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = aesia.optimizer.Adam(.{
+    .Optimizer = aesia.optimizer.AdamW(.{
         .learn_rate = 0.05,
-        // .weight_decay = 0.002,
+        .weight_decay = 0.002,
     }),
 });
 var model: Model = undefined;
@@ -177,8 +128,8 @@ pub fn main() !void {
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
 
     // Load prior model.
-    // std.debug.print("Loading latest mnist.model...", .{});
-    // try model.readFromFile("mnist.model");
+    // std.debug.print("Loading latest lut-convolution.model...", .{});
+    // try model.readFromFile("lut-convolution.model");
     // model.lock();
     // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
     // model.unlock();
@@ -205,8 +156,8 @@ pub fn main() !void {
     );
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 30;
-    const batch_size = 128;
+    const epoch_count = 1;
+    const batch_size = 32;
     model.train(
         .init(images_training[0..training_count], labels_training[0..training_count]),
         .init(images_validate[0..validate_count], labels_validate[0..validate_count]),
@@ -233,6 +184,6 @@ pub fn main() !void {
     );
     std.debug.print("Training took: {d}min\n", .{timer.read() / std.time.ns_per_min});
 
-    std.debug.print("Writing model to mnist.model\n", .{});
-    try model.writeToFile("mnist.model");
+    std.debug.print("Writing model to lut-convolution.model\n", .{});
+    try model.writeToFile("lut-convolution.model");
 }

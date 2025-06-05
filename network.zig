@@ -144,6 +144,7 @@ fn mustDeclareAs(
 fn check(Layer: type) void {
     const typeCheck = *const fn (type) void;
     const message_prefix = "Aesia layer:";
+    @setEvalBranchQuota(4000);
     inline for ([_]typeCheck{
         mustDeclareAs("ItemIn", &.{.isConst}, message_prefix),
         mustDeclareAs("ItemOut", &.{.isConst}, message_prefix),
@@ -200,11 +201,11 @@ pub fn Network(Layers: []const type) type {
     inline for (Layers) |Layer| check(Layer);
     inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
         if (prev.ItemOut != next.ItemIn) printCompileError(
-            "layers {s} and {s} have mismatched input/output item types",
+            "Aesia layers: {s} and {s} have mismatched input/output item types",
             .{ @typeName(prev), @typeName(next) },
         );
         if (prev.dim_out != next.dim_in) printCompileError(
-            "layers {s} and {s} have mismatched input/output dimension",
+            "Aesia layers: {s} and {s} have mismatched input/output dimension",
             .{ @typeName(prev), @typeName(next) },
         );
     }
@@ -307,6 +308,20 @@ pub fn Network(Layers: []const type) type {
             }
         }
 
+        pub fn readFromFile(parameters: *[parameter_count]f32, path: []const u8) !void {
+            const file = try std.fs.cwd().openFile(path, .{});
+            defer file.close();
+
+            var buffered = std.io.bufferedReader(file.reader());
+            var reader = buffered.reader();
+            inline for (parameter_ranges) |range| {
+                if (range.len > 0) {
+                    const slice = parameters[range.from..range.to()];
+                    _ = try reader.readAll(std.mem.sliceAsBytes(slice));
+                }
+            }
+        }
+
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
@@ -314,9 +329,9 @@ pub fn Network(Layers: []const type) type {
                 const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
                 const layer_output = buffer.back(LayerOutput(Layer));
                 if (comptime tag(Layer) == .namespace) {
-                    Layer.eval(layer_input, layer_output);
+                    Layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
                 } else {
-                    layer.eval(layer_input, layer_output);
+                    layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
                 }
                 buffer.flip();
             }
@@ -357,7 +372,7 @@ pub fn Network(Layers: []const type) type {
                     const slice: *[range.len]f32 = @alignCast(
                         @ptrCast(parameters[range.from..range.to()]),
                     );
-                    layer.init(slice);
+                    layer.init(@alignCast(@ptrCast(slice)));
                 } else {
                     layer.init();
                 }
@@ -371,9 +386,9 @@ pub fn Network(Layers: []const type) type {
                 const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
                 const layer_output = buffer.back(LayerOutput(Layer));
                 if (@sizeOf(Layer) > 0) {
-                    layer.forwardPass(layer_input, layer_output);
+                    layer.forwardPass(@ptrCast(layer_input), @ptrCast(layer_output));
                 } else {
-                    Layer.forwardPass(layer_input, layer_output);
+                    Layer.forwardPass(@ptrCast(layer_input), @ptrCast(layer_output));
                 }
                 buffer.flip();
             }
@@ -398,12 +413,23 @@ pub fn Network(Layers: []const type) type {
                 const output = buffer.back([Layer.dim_in]f32);
                 const range = parameter_ranges[l];
                 if (@sizeOf(Layer) == 0) {
-                    Layer.backwardPass(input, output);
+                    Layer.backwardPass(@ptrCast(input), @ptrCast(output));
                 } else if (range.len == 0) {
-                    layer.backwardPass(input, output);
+                    layer.backwardPass(@ptrCast(input), @ptrCast(output));
                 } else {
                     const gradient_slice = gradient[range.from..range.to()];
-                    layer.backwardPass(input, @alignCast(@ptrCast(gradient_slice)), output);
+                    if (l == 0) {
+                        layer.backwardPassFinal(
+                            @ptrCast(input),
+                            @alignCast(@ptrCast(gradient_slice)),
+                        );
+                    } else {
+                        layer.backwardPass(
+                            @ptrCast(input),
+                            @alignCast(@ptrCast(gradient_slice)),
+                            @ptrCast(output),
+                        );
+                    }
                 }
                 buffer.flip();
             }

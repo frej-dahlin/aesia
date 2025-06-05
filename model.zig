@@ -114,15 +114,18 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
             return result / @as(f32, @floatFromInt(dataset.len()));
         }
 
-        pub fn differentiate(model: *Self, dataset: Dataset) void {
+        pub fn differentiate(model: *Self, dataset: Dataset) f32 {
             @setFloatMode(.optimized);
             assert(model.locked);
             @memset(&model.gradient, 0);
+            var total_loss: f32 = 0;
             for (dataset.features, dataset.labels) |feature, label| {
                 const prediction = model.forwardPass(&feature);
                 Loss.gradient(prediction, &label, model.network.lastDeltaBuffer());
+                total_loss += Loss.eval(prediction, &label);
                 model.backwardPass();
             }
+            return total_loss;
         }
 
         /// Trains the model on a given dataset for a specified amount of epochs and batch size.
@@ -131,22 +134,37 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
             assert(!model.locked);
             assert(batch_size > 0);
             for (0..epoch_count) |epoch| {
+                var timer = std.time.Timer.start() catch unreachable;
                 var offset: usize = 0;
+                var training_loss: f32 = 0;
                 while (training.len() > offset) : (offset += batch_size) {
                     model.lock();
                     const subset = training.slice(offset, @min(offset + batch_size, training.len()));
-                    model.differentiate(subset);
+                    training_loss += model.differentiate(subset);
                     model.unlock();
                     model.optimizer.step(@ptrCast(&model.parameters), @ptrCast(&model.gradient));
                 }
                 model.lock();
-                if (validate.len() > 0) std.debug.print("epoch: {d}\tloss: {d}\n", .{ epoch, model.cost(validate) });
+                training_loss /= @as(f32, @floatFromInt(training.len()));
+                if (validate.len() > 0) std.debug.print(
+                    "EPOCH {d}\ntraining loss: {d:2.4}\nvalidate loss: {d:2.4}\nelapsed time: {d}s\n\n",
+                    .{
+                        epoch,
+                        training_loss,
+                        model.cost(validate),
+                        timer.read() / std.time.ns_per_s,
+                    },
+                );
                 model.unlock();
             }
         }
 
         pub fn writeToFile(self: *Self, path: []const u8) !void {
             try Network.writeToFile(&self.parameters, path);
+        }
+
+        pub fn readFromFile(self: *Self, path: []const u8) !void {
+            try Network.readFromFile(&self.parameters, path);
         }
     };
 }
