@@ -59,15 +59,11 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
 }
 
 const ConvolutionLogic = aesia.layer.ConvolutionLogic;
-const MultiLogicGate = aesia.layer.MultiLogicGate;
-const MultiLogicMax = aesia.layer.MultiLogicMax;
-const MultiLogicXOR = aesia.layer.MultiLogicXOR;
 const LogicLayer = aesia.layer.PackedLogic;
 const GroupSum = aesia.layer.GroupSum;
-const MaxPool = aesia.layer.MaxPool;
-const LUTConvolution = aesia.layer.LUTConvolutionPlies;
-const ButterflyMap = @import("dyadic_butterfly.zig").ButterflyMap;
-const ZeroPad = @import("pad.zig").ZeroPad;
+const LUTConvolution = aesia.layer.LUTConvolution;
+const ButterflyMap = aesia.layer.ButterflyMap;
+const ZeroPad = aesia.layer.ZeroPad;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
@@ -79,90 +75,39 @@ const Model = aesia.Model(&.{
         .height = 28,
         .width = 28,
         .lut_count = model_scale,
-        .field_size = .{ .height = 3, .width = 3 },
-        .stride = .{ .row = 1, .col = 1 },
-    }),
-    LUTConvolution(.{
-        .depth = model_scale,
-        .height = 26,
-        .width = 26,
-        .lut_count = 1,
         .field_size = .{ .height = 2, .width = 2 },
         .stride = .{ .row = 2, .col = 2 },
     }),
     LUTConvolution(.{
         .depth = model_scale,
-        .height = 13,
-        .width = 13,
-        .lut_count = 4,
-        .field_size = .{ .height = 3, .width = 3 },
+        .height = 14,
+        .width = 14,
+        .lut_count = 2,
+        .field_size = .{ .height = 2, .width = 2 },
         .stride = .{ .row = 2, .col = 2 },
+    }),
+    LUTConvolution(.{
+        .depth = 2 * model_scale,
+        .height = 7,
+        .width = 7,
+        .lut_count = 2,
+        .field_size = .{ .height = 2, .width = 2 },
+        .stride = .{ .row = 1, .col = 1 },
     }),
     LUTConvolution(.{
         .depth = 4 * model_scale,
         .height = 6,
         .width = 6,
-        .lut_count = 4,
+        .lut_count = 2,
         .field_size = .{ .height = 2, .width = 2 },
         .stride = .{ .row = 2, .col = 2 },
     }),
-    ZeroPad(16 * model_scale * 3 * 3, 4096),
-    ButterflyMap(12, 11),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 0),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 11),
-    MultiLogicGate(4096, 4096, .{ .arity = 4, .rand = &rand }),
-    ButterflyMap(12, 11),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 0),
-    MultiLogicGate(4096, 4096, .{ .arity = 4, .rand = &rand }),
-    ButterflyMap(12, 0),
-    ButterflyMap(12, 1),
-    ButterflyMap(12, 2),
-    ButterflyMap(12, 3),
-    ButterflyMap(12, 4),
-    ButterflyMap(12, 5),
-    ButterflyMap(12, 6),
-    ButterflyMap(12, 7),
-    ButterflyMap(12, 8),
-    ButterflyMap(12, 9),
-    ButterflyMap(12, 10),
-    ButterflyMap(12, 11),
-    MultiLogicGate(4096, 4096, .{ .arity = 4, .rand = &rand }),
-    GroupSum(4096, 10),
+    LogicLayer(8 * model_scale * 3 * 3, 8192, .{ .rand = &rand }),
+    GroupSum(8192, 10),
 }, .{
     .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
     .Optimizer = aesia.optimizer.Adam(.{
         .learn_rate = 0.05,
-        // .weight_decay = 0.002,
     }),
 });
 var model: Model = undefined;
