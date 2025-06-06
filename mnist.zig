@@ -70,44 +70,108 @@ var rand = pcg.random();
 const width = 32_000;
 const model_scale = 4;
 const Model = aesia.Model(&.{
-    LUTConvolution(.{
-        .depth = 1,
-        .height = 28,
-        .width = 28,
-        .lut_count = model_scale,
-        .field_size = .{ .height = 2, .width = 2 },
-        .stride = .{ .row = 2, .col = 2 },
-    }),
-    LUTConvolution(.{
-        .depth = model_scale,
-        .height = 14,
-        .width = 14,
-        .lut_count = 2,
-        .field_size = .{ .height = 2, .width = 2 },
-        .stride = .{ .row = 2, .col = 2 },
-    }),
-    LUTConvolution(.{
-        .depth = 2 * model_scale,
-        .height = 7,
-        .width = 7,
-        .lut_count = 2,
-        .field_size = .{ .height = 2, .width = 2 },
-        .stride = .{ .row = 1, .col = 1 },
-    }),
-    LUTConvolution(.{
-        .depth = 4 * model_scale,
-        .height = 6,
-        .width = 6,
-        .lut_count = 2,
-        .field_size = .{ .height = 2, .width = 2 },
-        .stride = .{ .row = 2, .col = 2 },
-    }),
-    LogicLayer(8 * model_scale * 3 * 3, 8192, .{ .rand = &rand }),
-    ButterflyMap(13, 12),
-    ButterflyMap(13, 11),
-    ButterflyMap(13, 10),
-    LogicLayer(8192, 8192, .{ .rand = &rand }),
-    GroupSum(8192, 10),
+    //     LUTConvolution(.{
+    //         .depth = 1,
+    //         .height = 28,
+    //         .width = 28,
+    //         .lut_count = model_scale,
+    //         .field_size = .{ .height = 2, .width = 2 },
+    //         .stride = .{ .row = 2, .col = 2 },
+    //     }),
+    //     LUTConvolution(.{
+    //         .depth = model_scale,
+    //         .height = 14,
+    //         .width = 14,
+    //         .lut_count = 2,
+    //         .field_size = .{ .height = 2, .width = 2 },
+    //         .stride = .{ .row = 2, .col = 2 },
+    //     }),
+    //     LUTConvolution(.{
+    //         .depth = 2 * model_scale,
+    //         .height = 7,
+    //         .width = 7,
+    //         .lut_count = 2,
+    //         .field_size = .{ .height = 2, .width = 2 },
+    //         .stride = .{ .row = 1, .col = 1 },
+    //     }),
+    //     LUTConvolution(.{
+    //         .depth = 4 * model_scale,
+    //         .height = 6,
+    //         .width = 6,
+    //         .lut_count = 2,
+    //         .field_size = .{ .height = 2, .width = 2 },
+    //         .stride = .{ .row = 2, .col = 2 },
+    //     }),
+    //     aesia.layer.Repeat(8 * model_scale * 3 * 3, 8192),
+    // } ++ aesia.layer.BenesMap(13) ++
+    //     .{
+    //         aesia.layer.LogicSequential(4096),
+    //     } ++ aesia.layer.BenesMap(12) ++
+    //     .{
+    //         aesia.layer.LogicSequential(2048),
+    //     } ++ aesia.layer.BenesMap(11) ++
+    //     .{
+    //         aesia.layer.LogicSequential(1024),
+    //         GroupSum(1024, 10),
+    //     }, .{
+    aesia.layer.Repeat(784, 8192),
+    aesia.layer.ButterflyMap(13, 12),
+    aesia.layer.ButterflyMap(13, 11),
+    aesia.layer.ButterflyMap(13, 10),
+    aesia.layer.ButterflyMap(13, 9),
+    aesia.layer.ButterflyMap(13, 8),
+    aesia.layer.ButterflyMap(13, 7),
+    aesia.layer.ButterflyMap(13, 6),
+    aesia.layer.ButterflyMap(13, 5),
+    aesia.layer.ButterflyMap(13, 4),
+    aesia.layer.ButterflyMap(13, 3),
+    aesia.layer.ButterflyMap(13, 2),
+    aesia.layer.ButterflyMap(13, 1),
+    aesia.layer.ButterflyMap(13, 0),
+    aesia.layer.ButterflyMap(13, 1),
+    aesia.layer.ButterflyMap(13, 2),
+    aesia.layer.ButterflyMap(13, 3),
+    aesia.layer.ButterflyMap(13, 4),
+    aesia.layer.ButterflyMap(13, 5),
+    aesia.layer.ButterflyMap(13, 6),
+    aesia.layer.ButterflyMap(13, 7),
+    aesia.layer.ButterflyMap(13, 8),
+    aesia.layer.ButterflyMap(13, 9),
+    aesia.layer.ButterflyMap(13, 10),
+    aesia.layer.ButterflyMap(13, 11),
+    aesia.layer.ButterflyMap(13, 12),
+    aesia.layer.LogicSequential(4096),
+    aesia.layer.Repeat(4096, 8192),
+    aesia.layer.ButterflyMap(13, 12),
+    aesia.layer.ButterflyMap(13, 11),
+    aesia.layer.ButterflyMap(13, 10),
+    aesia.layer.ButterflyMap(13, 9),
+    aesia.layer.ButterflyMap(13, 8),
+    aesia.layer.ButterflyMap(13, 7),
+    aesia.layer.ButterflyMap(13, 6),
+    aesia.layer.ButterflyMap(13, 5),
+    aesia.layer.ButterflyMap(13, 4),
+    aesia.layer.ButterflyMap(13, 3),
+    aesia.layer.ButterflyMap(13, 2),
+    aesia.layer.ButterflyMap(13, 1),
+    aesia.layer.ButterflyMap(13, 0),
+    aesia.layer.LogicSequential(4096),
+    aesia.layer.Repeat(4096, 8192),
+    aesia.layer.ButterflyMap(13, 0),
+    aesia.layer.ButterflyMap(13, 1),
+    aesia.layer.ButterflyMap(13, 2),
+    aesia.layer.ButterflyMap(13, 3),
+    aesia.layer.ButterflyMap(13, 4),
+    aesia.layer.ButterflyMap(13, 5),
+    aesia.layer.ButterflyMap(13, 6),
+    aesia.layer.ButterflyMap(13, 7),
+    aesia.layer.ButterflyMap(13, 8),
+    aesia.layer.ButterflyMap(13, 9),
+    aesia.layer.ButterflyMap(13, 10),
+    aesia.layer.ButterflyMap(13, 11),
+    aesia.layer.ButterflyMap(13, 12),
+    aesia.layer.LogicSequential(4096),
+    GroupSum(4096, 10),
 }, .{
     .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
     .Optimizer = aesia.optimizer.Adam(.{
@@ -126,13 +190,13 @@ pub fn main() !void {
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
 
     // Load prior model.
-    // std.debug.print("Loading latest mnist.model...", .{});
-    // try model.readFromFile("mnist.model");
-    // model.lock();
-    // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
-    // model.unlock();
+    std.debug.print("Loading latest mnist.model...", .{});
+    try model.readFromFile("mnist.model");
+    model.lock();
+    std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    model.unlock();
 
-    const training_count = 1_000;
+    const training_count = 60_000;
     const validate_count = 10_000;
 
     model.lock();

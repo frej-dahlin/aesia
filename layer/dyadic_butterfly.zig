@@ -268,3 +268,22 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
         }
     };
 }
+
+pub fn BenesMap(log2_dim: usize) []const type {
+    var result: [2 * log2_dim - 1]type = undefined;
+
+    var index: usize = 0;
+    {
+        var stage = log2_dim;
+        while (stage > 0) {
+            stage -= 1;
+            result[index] = ButterflyMap(log2_dim, stage);
+            index += 1;
+        }
+    }
+    for (1..log2_dim) |stage| {
+        result[index] = ButterflyMap(log2_dim, stage);
+        index += 1;
+    }
+    return &result;
+}

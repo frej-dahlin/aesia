@@ -445,6 +445,113 @@ pub fn PackedLogic(dim_in: usize, dim_out: usize, options: LogicOptions) type {
     };
 }
 
+pub fn LogicSequential(gate_count: usize) type {
+    return struct {
+        const Self = @This();
+
+        const parameter_count = gate_count * 4;
+        const parameter_alignment = 64;
+
+        pub const info = aesia.layer.Info{
+            .dim_in = gate_count * 2,
+            .dim_out = gate_count,
+            .trainable = true,
+            .parameter_count = parameter_count,
+            .parameter_alignment = parameter_alignment,
+            // Fixme: .in_place = true,
+        };
+
+        luts: [gate_count]f32x4,
+        input_buffer: [gate_count][2]f32,
+
+        pub fn eval(
+            self: *const Self,
+            input: *const [gate_count][2]f32,
+            output: *[gate_count]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (self.luts, input, output) |lut, bits, *activation| {
+                const a, const b = bits;
+                activation.* = @reduce(.Add, lut * f32x4{
+                    a * b,
+                    a * (1 - b),
+                    (1 - a) * b,
+                    (1 - a) * (1 - b),
+                });
+            }
+        }
+
+        pub fn init(_: *Self, parameters: *[gate_count]f32x4) void {
+            parameters.* = @splat(.{ 1, 1, 0, 0 });
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *[gate_count]f32x4) void {
+            @setFloatMode(.optimized);
+            for (parameters, &self.luts) |logit, *expit| expit.* =
+                @as(f32x4, @splat(1)) / (@as(f32x4, @splat(1)) + @exp(-logit));
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [gate_count][2]f32,
+            output: *[gate_count]f32,
+        ) void {
+            @memcpy(&self.input_buffer, input);
+            self.eval(input, output);
+        }
+
+        pub fn backwardPass(
+            self: *const Self,
+            activation_delta: *const [gate_count]f32,
+            cost_gradient: *[gate_count]f32x4,
+            argument_delta: *[gate_count][2]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            argument_delta.* = @splat(@splat(0));
+            for (0..gate_count) |i| {
+                const a, const b = self.input_buffer[i];
+                const lut = self.luts[i];
+                cost_gradient[i] += @as(f32x4, @splat(activation_delta[i])) *
+                    lut * (@as(f32x4, @splat(1)) - lut) * f32x4{
+                    a * b,
+                    a * (1 - b),
+                    (1 - a) * b,
+                    (1 - a) * (1 - b),
+                };
+                argument_delta[i][0] = activation_delta[i] * @reduce(
+                    .Add,
+                    lut * f32x4{ b, 1 - b, -b, -(1 - b) },
+                );
+                argument_delta[i][1] = activation_delta[i] * @reduce(
+                    .Add,
+                    lut * f32x4{ a, -a, 1 - a, -(1 - a) },
+                );
+            }
+        }
+
+        pub fn backwardPassFinal(
+            self: *const Self,
+            activation_delta: *const [gate_count]f32,
+            cost_gradient: *[gate_count]f32x4,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..gate_count) |i| {
+                const a, const b = self.input_buffer[i];
+                const lut = self.luts[i];
+                cost_gradient[i] += @as(f32x4, @splat(activation_delta[i])) * lut * (1 - lut) *
+                    f32x4{
+                        a * b,
+                        a * (1 - b),
+                        (1 - a) * b,
+                        (1 - a) * (1 - b),
+                    };
+            }
+        }
+    };
+}
+
 pub const LUTConvolutionOptions = struct {
     depth: usize,
     height: usize,

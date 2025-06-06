@@ -2,17 +2,21 @@ const std = @import("std");
 
 const logic = @import("layer/logic.zig");
 const dyadic_butterfly = @import("layer/dyadic_butterfly.zig");
+const pad = @import("layer/pad.zig");
 
 pub const GroupSum = @import("layer/group_sum.zig").GroupSum;
 pub const ZeroPad = @import("layer/pad.zig").ZeroPad;
+pub const Repeat = pad.Repeat;
 
 pub const ButterflySwap = dyadic_butterfly.ButterflySwap;
 pub const ButterflyMap = dyadic_butterfly.ButterflyMap;
+pub const BenesMap = dyadic_butterfly.BenesMap;
 
 pub const Logic = logic.Logic;
 pub const PackedLogic = logic.PackedLogic;
 pub const LUTConvolution = logic.LUTConvolution;
 pub const LUT = logic.LUT;
+pub const LogicSequential = logic.LogicSequential;
 
 /// Aesia layers need to declare a public constant of name "info" of the following type.
 /// For more info about the layer API, see network.zig.

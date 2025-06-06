@@ -101,6 +101,7 @@ fn printCompileError(comptime fmt: []const u8, args: anytype) void {
 /// where *@This() is only passed for non namespace layers and only trainable layers act on the
 /// gradient of its parameters in backwardPass.
 pub fn Network(Layers: []const type) type {
+    @setEvalBranchQuota(1000 * Layers.len);
     inline for (Layers) |Layer| aesia.layer.check(Layer);
     inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
         if (prev.info.ItemOut != next.info.ItemIn) printCompileError(
@@ -310,7 +311,7 @@ pub fn Network(Layers: []const type) type {
                     Layer.backwardPass(@ptrCast(input), @ptrCast(output));
                 } else if (!Layer.info.trainable and l > 0) {
                     layer.backwardPass(@ptrCast(input), @ptrCast(output));
-                } else {
+                } else if (Layer.info.trainable) {
                     const gradient_slice = gradient[range.from..range.to()];
                     if (l == 0) {
                         layer.backwardPassFinal(
