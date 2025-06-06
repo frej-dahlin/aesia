@@ -1,18 +1,23 @@
+const aesia = @import("../aesia.zig");
+
 /// Divides the input into dim_out buckets, each output is the sequential sum of
 /// dim_in / dim_out items of the input.
-pub fn GroupSum(dim_in_: usize, dim_out_: usize) type {
+pub fn GroupSum(dim_in: usize, dim_out: usize) type {
     return struct {
         const Self = @This();
 
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = dim_in_;
-        pub const dim_out = dim_out_;
+        pub const info = aesia.layer.Info{
+            .dim_in = dim_in,
+            .dim_out = dim_out,
+            .trainable = false,
+            .statefull = false,
+            // Fixme: declare this layer to be in place.
+        };
 
         const quot = dim_in / dim_out;
         const scale: f32 = 1.0 / (@as(comptime_float, @floatFromInt(dim_out)));
 
-        pub fn eval(input: *const [dim_in]ItemIn, output: *[dim_out]ItemOut) void {
+        pub fn eval(input: *const [dim_in]f32, output: *[dim_out]f32) void {
             @memset(output, 0);
             for (output, 0..) |*coord, k| {
                 const from = k * quot;
@@ -22,7 +27,7 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize) type {
             }
         }
 
-        pub fn forwardPass(input: *const [dim_in]ItemIn, output: *[dim_out]ItemOut) void {
+        pub fn forwardPass(input: *const [dim_in]f32, output: *[dim_out]f32) void {
             return eval(input, output);
         }
 

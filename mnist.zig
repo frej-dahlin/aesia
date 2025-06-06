@@ -103,6 +103,10 @@ const Model = aesia.Model(&.{
         .stride = .{ .row = 2, .col = 2 },
     }),
     LogicLayer(8 * model_scale * 3 * 3, 8192, .{ .rand = &rand }),
+    ButterflyMap(13, 12),
+    ButterflyMap(13, 11),
+    ButterflyMap(13, 10),
+    LogicLayer(8192, 8192, .{ .rand = &rand }),
     GroupSum(8192, 10),
 }, .{
     .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
@@ -128,7 +132,7 @@ pub fn main() !void {
     // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
     // model.unlock();
 
-    const training_count = 60_000;
+    const training_count = 1_000;
     const validate_count = 10_000;
 
     model.lock();

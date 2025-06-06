@@ -1,6 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const aesia = @import("../aesia.zig");
+
 const f32x16 = @Vector(16, f32);
 const f32x8 = @Vector(8, f32);
 const f32x4 = @Vector(4, f32);
@@ -271,19 +273,24 @@ pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
 /// above expression is the sum of the relaxation of the or-clauses! This leaves
 /// us with the expression in packed_gate.eval, the gradient and so forth can
 /// easily be derived from there.
-pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
+pub fn PackedLogic(dim_in: usize, dim_out: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
 
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = dim_in_;
-        pub const dim_out = dim_out_;
         // There are 16 possible logic gates, we use a novel packed representation
         // that packs these into 4 parameters.
-        pub const parameter_count = 4 * node_count;
-        // For efficient SIMD we ensure that the parameters align to a cacheline.
-        pub const parameter_alignment: usize = 64;
+        const parameter_count = 4 * node_count;
+
+        pub const info = aesia.layer.Info{
+            .dim_in = dim_in,
+            .dim_out = dim_out,
+            .trainable = true,
+            // There are 16 possible logic gates, we use a novel packed representation
+            // that packs these into 4 parameters.
+            .parameter_count = 4 * node_count,
+            // For efficient SIMD we ensure that the parameters align to a cacheline.
+            .parameter_alignment = 64,
+        };
 
         const node_count = dim_out;
         const ParentIndex = std.math.IntFittingRange(0, dim_in);
@@ -356,8 +363,8 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
         /// Evaluates the layer.
         pub fn eval(
             noalias self: *Self,
-            noalias input: *const [dim_in]ItemIn,
-            noalias output: *[dim_out]ItemOut,
+            noalias input: *const [dim_in]f32,
+            noalias output: *[dim_out]f32,
         ) void {
             @setFloatMode(.optimized);
             for (self.beta, output, 0..) |beta, *activation, j| {
@@ -370,8 +377,8 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
         /// Evaluates the layer and caches the arguments to each gate to be used in backwardPass.
         pub fn forwardPass(
             noalias self: *Self,
-            noalias input: *const [dim_in]ItemIn,
-            noalias output: *[dim_out]ItemOut,
+            noalias input: *const [dim_in]f32,
+            noalias output: *[dim_out]f32,
         ) void {
             @setFloatMode(.optimized);
             // For some reason it is faster to to a simple loop rather than a multi item one.
@@ -470,12 +477,13 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         const height_out = Ply.height_out;
         const width_out = Ply.width_out;
 
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = depth_in * height_in * width_in;
-        pub const dim_out = depth_out * height_out * width_out;
-        pub const parameter_count = depth_in * Ply.parameter_count;
-        pub const parameter_alignment = Ply.parameter_alignment;
+        pub const info = aesia.layer.Info{
+            .dim_in = depth_in * height_in * width_in,
+            .dim_out = depth_out * height_out * width_out,
+            .parameter_count = depth_in * Ply.info.parameter_count.?,
+            .parameter_alignment = Ply.info.parameter_alignment.?,
+            .trainable = true,
+        };
 
         plies: [depth_in]Ply,
 
@@ -583,12 +591,13 @@ fn LUTConvolutionPly(options: LUTConvolutionPlyOptions) type {
         const ArgumentIndex = std.math.IntFittingRange(0, lut_arity);
         const ExpitIndex = std.math.IntFittingRange(0, lut_parameter_count - 1);
 
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = height_in * width_in;
-        pub const dim_out = height_out * width_out * lut_count;
-        pub const parameter_count = lut_count * lut_parameter_count;
-        pub const parameter_alignment = 64;
+        pub const info = aesia.layer.Info{
+            .dim_in = height_in * width_in,
+            .dim_out = height_out * width_out * lut_count,
+            .trainable = true,
+            .parameter_count = lut_count * lut_parameter_count,
+            .parameter_alignment = 64,
+        };
 
         // The lookup tables are stored in column major order, this is because we evaluate
         // all lookup tables given a certain input.
@@ -899,18 +908,21 @@ pub const LUTOptions = struct {
     rand: *std.Random,
 };
 
-pub fn LUT(dim_in_: usize, dim_out_: usize, options: LUTOptions) type {
+pub fn LUT(dim_in: usize, dim_out: usize, options: LUTOptions) type {
     return struct {
         const Self = @This();
 
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = dim_in_;
-        pub const dim_out = dim_out_;
-
-        pub const parameter_count = parameter_vector_len * node_count;
+        const parameter_count = parameter_vector_len * node_count;
         // For efficient SIMD we ensure that the parameters align to a cacheline.
-        pub const parameter_alignment: usize = @max(64, @alignOf(ParameterVector));
+        const parameter_alignment: usize = @max(64, @alignOf(ParameterVector));
+
+        pub const info = aesia.layer.Info{
+            .dim_in = dim_in,
+            .dim_out = dim_out,
+            .trainable = true,
+            .parameter_count = parameter_count,
+            .parameter_alignment = parameter_alignment,
+        };
 
         const node_count = dim_out;
         const ParentIndex = std.math.IntFittingRange(0, dim_in);
@@ -999,8 +1011,8 @@ pub fn LUT(dim_in_: usize, dim_out_: usize, options: LUTOptions) type {
 
         pub fn eval(
             noalias self: *Self,
-            noalias input: *const [dim_in]ItemIn,
-            noalias output: *[dim_out]ItemOut,
+            noalias input: *const [dim_in]f32,
+            noalias output: *[dim_out]f32,
         ) void {
             @setFloatMode(.optimized);
             for (0..node_count) |j| {
@@ -1015,8 +1027,8 @@ pub fn LUT(dim_in_: usize, dim_out_: usize, options: LUTOptions) type {
 
         pub fn forwardPass(
             noalias self: *Self,
-            noalias input: *const [dim_in]ItemIn,
-            noalias output: *[dim_out]ItemOut,
+            noalias input: *const [dim_in]f32,
+            noalias output: *[dim_out]f32,
         ) void {
             @setFloatMode(.optimized);
             // For some reason it is faster to to a simple loop rather than a multi item one.
