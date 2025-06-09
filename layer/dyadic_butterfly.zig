@@ -230,12 +230,15 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
                         activation_delta[j + delta] * (a - b) * d * (1 - d);
                     steer_index += 1;
 
+                    const left_delta = activation_delta[j];
+                    const right_delta = activation_delta[j + delta];
+
                     argument_delta[j] +=
-                        activation_delta[j] * (1 - c) +
-                        activation_delta[j + delta] * d;
+                        left_delta * (1 - c) +
+                        right_delta * d;
                     argument_delta[j + delta] +=
-                        activation_delta[j] * c +
-                        activation_delta[j + delta] * (1 - d);
+                        left_delta * c +
+                        right_delta * (1 - d);
                 }
             }
         }

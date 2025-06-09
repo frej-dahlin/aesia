@@ -221,14 +221,17 @@ pub fn Network(Layers: []const type) type {
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
             inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(Layer.info.Input());
-                const layer_output = buffer.back(Layer.info.Output());
+                const input_buffer = if (l == 0) input else buffer.front(Layer.info.Input());
+                const output_buffer: *Layer.info.Output() = if (Layer.info.in_place)
+                    @constCast(buffer.front(Layer.info.Output()))
+                else
+                    buffer.back(Layer.info.Output());
                 if (Layer.info.statefull) {
-                    layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
+                    layer.eval(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 } else {
-                    Layer.eval(@ptrCast(layer_input), @ptrCast(layer_output));
+                    Layer.eval(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 }
-                buffer.flip();
+                if (!Layer.info.in_place) buffer.flip();
             }
             return buffer.front(Output);
         }
@@ -278,14 +281,17 @@ pub fn Network(Layers: []const type) type {
         pub fn forwardPass(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
             inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(Layer.info.Input());
-                const layer_output = buffer.back(Layer.info.Output());
-                if (@sizeOf(Layer) > 0) {
-                    layer.forwardPass(@ptrCast(layer_input), @ptrCast(layer_output));
+                const input_buffer = if (l == 0) input else buffer.front(Layer.info.Input());
+                const output_buffer: *Layer.info.Output() = if (comptime Layer.info.in_place)
+                    @constCast(buffer.front(Layer.info.Output()))
+                else
+                    buffer.back(Layer.info.Output());
+                if (Layer.info.statefull) {
+                    layer.forwardPass(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 } else {
-                    Layer.forwardPass(@ptrCast(layer_input), @ptrCast(layer_output));
+                    Layer.forwardPass(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 }
-                buffer.flip();
+                if (comptime !Layer.info.in_place) buffer.flip();
             }
             return buffer.front(Output);
         }
@@ -304,8 +310,11 @@ pub fn Network(Layers: []const type) type {
                 l -= 1;
                 const Layer = Layers[l];
                 const layer = &self.layers[l];
-                const input = buffer.front(Layer.info.Input());
-                const output = buffer.back(Layer.info.Output());
+                const input = buffer.front([Layer.info.dim_out]f32);
+                const output: *[Layer.info.dim_in]f32 = if (Layer.info.in_place)
+                    @constCast(buffer.front([Layer.info.dim_in]f32))
+                else
+                    buffer.back([Layer.info.dim_in]f32);
                 const range = parameter_ranges[l];
                 if (!Layer.info.statefull and l > 0) {
                     Layer.backwardPass(@ptrCast(input), @ptrCast(output));
