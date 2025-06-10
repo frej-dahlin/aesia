@@ -108,3 +108,60 @@ pub fn Adam(options: AdamOptions) fn (usize) type {
         }
     }.Optimizer;
 }
+
+pub const AdamWOptions = struct {
+    learn_rate: f32 = 0.01,
+    weight_decay: f32 = 0.0002,
+    beta: [2]f32 = .{ 0.9, 0.999 },
+    epsilon: f32 = 1e-8,
+
+    pub const default = @This(){};
+};
+
+pub fn AdamW(options: AdamWOptions) fn (usize) type {
+    if (options.learn_rate <= 0)
+        @compileError(comptimePrint("AdamW: invalid learn_rate {d} <= 0", .{options.learn_rate}));
+    if (options.epsilon <= 0)
+        @compileError(comptimePrint("AdamW: invalid epsilon {d} <= 0", .{options.epsilon}));
+    return struct {
+        pub fn Optimizer(parameter_count: usize) type {
+            assertParameterCount(parameter_count);
+            const vector_count = parameter_count / vector_len;
+            return struct {
+                const Self = @This();
+
+                const learn_rate = options.learn_rate;
+                const weight_decay = options.weight_decay;
+                const beta = options.beta;
+                const epsilon = options.epsilon;
+
+                m: [vector_count]Vector,
+                v: [vector_count]Vector,
+
+                pub const default = Self{
+                    .m = @splat(@splat(0)),
+                    .v = @splat(@splat(0)),
+                };
+
+                pub fn step(
+                    self: *Self,
+                    parameters: *[vector_count]Vector,
+                    gradient: *[vector_count]Vector,
+                ) void {
+                    @setFloatMode(.optimized);
+                    for (parameters, gradient, &self.m, &self.v) |*parameter, partial, *m, *v| {
+                        parameter.* -= @as(Vector, @splat(learn_rate * weight_decay)) * parameter.*;
+                        m.* = @as(Vector, @splat(beta[0])) * m.* +
+                            @as(Vector, @splat(1 - beta[0])) * partial;
+                        v.* = @as(Vector, @splat(beta[1])) * v.* +
+                            @as(Vector, @splat(1 - beta[1])) * partial * partial;
+                        const m_hat = m.* / @as(Vector, @splat(1 - beta[0]));
+                        const v_hat = v.* / @as(Vector, @splat(1 - beta[1]));
+                        parameter.* -= @as(Vector, @splat(learn_rate)) * m_hat /
+                            (@sqrt(v_hat) + @as(Vector, @splat(epsilon)));
+                    }
+                }
+            };
+        }
+    }.Optimizer;
+}

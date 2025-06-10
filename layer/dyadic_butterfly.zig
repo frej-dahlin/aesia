@@ -1,3 +1,5 @@
+const aesia = @import("../aesia.zig");
+
 /// A differentiable dyadic butterfly swap is one layer of a permutation network,
 /// such as a butterfly diagram. It only accepts perfect powers of two, hence the layer is
 /// specified by the parameter log2_dim, there are log2_dim possible 'stages'.
@@ -20,13 +22,16 @@ pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
         const dim = 1 << log2_dim;
         // Distance between pairs.
         const delta = 1 << stage;
+        const parameter_count = dim / 2;
+        const parameter_alignment = 64;
 
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = dim;
-        pub const dim_out = dim;
-        pub const parameter_count = dim / 2;
-        pub const parameter_alignment = 64;
+        pub const info = aesia.layer.Info{
+            .dim_in = dim,
+            .dim_out = dim,
+            .trainable = true,
+            .parameter_count = parameter_count,
+            .parameter_alignment = 64,
+        };
 
         steer: [dim / 2]f32,
         input_buffer: [dim]f32,
@@ -148,13 +153,16 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
         const dim = 1 << log2_dim;
         // Distance between pairs.
         const delta = 1 << stage;
+        const parameter_count = dim;
+        const parameter_alignment = 64;
 
-        pub const ItemIn = f32;
-        pub const ItemOut = f32;
-        pub const dim_in = dim;
-        pub const dim_out = dim;
-        pub const parameter_count = dim;
-        pub const parameter_alignment = 64;
+        pub const info = aesia.layer.Info{
+            .dim_in = dim,
+            .dim_out = dim,
+            .trainable = true,
+            .parameter_count = parameter_count,
+            .parameter_alignment = 64,
+        };
 
         steer: [dim]f32,
         input_buffer: [dim]f32,
@@ -222,12 +230,15 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
                         activation_delta[j + delta] * (a - b) * d * (1 - d);
                     steer_index += 1;
 
+                    const left_delta = activation_delta[j];
+                    const right_delta = activation_delta[j + delta];
+
                     argument_delta[j] +=
-                        activation_delta[j] * (1 - c) +
-                        activation_delta[j + delta] * d;
+                        left_delta * (1 - c) +
+                        right_delta * d;
                     argument_delta[j + delta] +=
-                        activation_delta[j] * c +
-                        activation_delta[j + delta] * (1 - d);
+                        left_delta * c +
+                        right_delta * (1 - d);
                 }
             }
         }
@@ -259,4 +270,23 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
             }
         }
     };
+}
+
+pub fn BenesMap(log2_dim: usize) []const type {
+    var result: [2 * log2_dim - 1]type = undefined;
+
+    var index: usize = 0;
+    {
+        var stage = log2_dim;
+        while (stage > 0) {
+            stage -= 1;
+            result[index] = ButterflyMap(log2_dim, stage);
+            index += 1;
+        }
+    }
+    for (1..log2_dim) |stage| {
+        result[index] = ButterflyMap(log2_dim, stage);
+        index += 1;
+    }
+    return &result;
 }

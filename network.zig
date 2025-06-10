@@ -2,6 +2,8 @@ const std = @import("std");
 const meta = std.meta;
 const assert = std.debug.assert;
 
+const aesia = @import("aesia.zig");
+
 /// Ranges are stored in this manner to make the illegal ranges (where to < from) unrepresentable.
 const Range = struct {
     from: usize,
@@ -70,106 +72,8 @@ pub fn DoubleBuffer(size: usize, alignment: usize) type {
     };
 }
 
-const Tag = enum {
-    namespace,
-    statefull,
-    trainable,
-};
-
-fn tag(Layer: type) Tag {
-    if (@sizeOf(Layer) == 0) {
-        return .namespace;
-    } else if (!@hasDecl(Layer, "parameter_count")) {
-        return .statefull;
-    } else {
-        return .trainable;
-    }
-}
-
 fn printCompileError(comptime fmt: []const u8, args: anytype) void {
     @compileError(std.fmt.comptimePrint(fmt, args));
-}
-
-const DeclarationConstraint = enum {
-    isConst,
-    isPositiveInt,
-};
-
-fn mustNotDeclare(T: type, decl_name: []const u8, message_prefix: []const u8) void {
-    if (@hasDecl(T, decl_name)) printCompileError(
-        "{s} {s} must not declare '{s}'",
-        .{ message_prefix, @typeName(T), decl_name },
-    );
-}
-
-fn mustDeclareAs(
-    decl_name: []const u8,
-    constraints: []const DeclarationConstraint,
-    message_prefix: []const u8,
-) fn (type) void {
-    return struct {
-        pub fn constrain(T: type) void {
-            const type_name = @typeName(T);
-
-            if (!@hasDecl(T, decl_name)) printCompileError(
-                "{s} {s} must declare '{s}'",
-                .{ message_prefix, type_name, decl_name },
-            );
-
-            for (constraints) |constraint| switch (constraint) {
-                .isConst => {
-                    const decl_ptr = &@field(T, decl_name);
-                    if (!@typeInfo(@TypeOf(decl_ptr)).pointer.is_const) printCompileError(
-                        "{s} {s} must declare '{s}' as const",
-                        .{ message_prefix, type_name, decl_name },
-                    );
-                },
-                .isPositiveInt => {
-                    const decl_value = @field(T, decl_name);
-                    const decl_type = @TypeOf(decl_value);
-                    const info = @typeInfo(decl_type);
-                    const condition = (decl_type == comptime_int or info == .int) and
-                        decl_value > 0;
-                    if (!condition) printCompileError(
-                        "{s} {s} must declare '{s}' as a positive integer",
-                        .{ message_prefix, type_name, decl_name },
-                    );
-                },
-            };
-        }
-    }.constrain;
-}
-
-/// Compile time checks for the layer interface.
-fn check(Layer: type) void {
-    const typeCheck = *const fn (type) void;
-    const message_prefix = "Aesia layer:";
-    inline for ([_]typeCheck{
-        mustDeclareAs("ItemIn", &.{.isConst}, message_prefix),
-        mustDeclareAs("ItemOut", &.{.isConst}, message_prefix),
-        mustDeclareAs("dim_in", &.{ .isConst, .isPositiveInt }, message_prefix),
-        mustDeclareAs("dim_out", &.{ .isConst, .isPositiveInt }, message_prefix),
-    }) |constrain| constrain(Layer);
-
-    switch (tag(Layer)) {
-        .namespace => {},
-        .statefull => {},
-        .trainable => {
-            const trainable_prefix = "Aesia trainable layer:";
-            inline for ([_]typeCheck{
-                mustDeclareAs(
-                    "parameter_count",
-                    &.{ .isConst, .isPositiveInt },
-                    trainable_prefix,
-                ),
-                mustDeclareAs(
-                    "parameter_alignment",
-                    &.{ .isConst, .isPositiveInt },
-                    trainable_prefix,
-                ),
-            }) |constrain| constrain(Layer);
-        },
-    }
 }
 
 /// A feedforward network of compile time known layer types.
@@ -197,14 +101,15 @@ fn check(Layer: type) void {
 /// where *@This() is only passed for non namespace layers and only trainable layers act on the
 /// gradient of its parameters in backwardPass.
 pub fn Network(Layers: []const type) type {
-    inline for (Layers) |Layer| check(Layer);
+    @setEvalBranchQuota(1000 * Layers.len);
+    inline for (Layers) |Layer| aesia.layer.check(Layer);
     inline for (Layers[0 .. Layers.len - 1], Layers[1..]) |prev, next| {
-        if (prev.ItemOut != next.ItemIn) printCompileError(
-            "layers {s} and {s} have mismatched input/output item types",
+        if (prev.info.ItemOut != next.info.ItemIn) printCompileError(
+            "Aesia: mismatched input/output item types in layers:\n{s}\n{s}",
             .{ @typeName(prev), @typeName(next) },
         );
-        if (prev.dim_out != next.dim_in) printCompileError(
-            "layers {s} and {s} have mismatched input/output dimension",
+        if (prev.info.dim_out != next.info.dim_in) printCompileError(
+            "Aesia: mismatched input/output dimension in layers:\n{s}\n{s}",
             .{ @typeName(prev), @typeName(next) },
         );
     }
@@ -220,7 +125,7 @@ pub fn Network(Layers: []const type) type {
         pub const parameter_alignment = blk: {
             var max: usize = 0;
             for (Layers) |Layer| {
-                if (tag(Layer) == .trainable) max = @max(max, Layer.parameter_alignment);
+                if (Layer.info.trainable) max = @max(max, Layer.info.parameter_alignment.?);
             }
             break :blk max;
         };
@@ -228,19 +133,17 @@ pub fn Network(Layers: []const type) type {
             var offset: usize = 0;
             var ranges: [Layers.len]Range = undefined;
             for (&ranges, Layers) |*range, Layer| {
-                // We branch here so that parameterless layers do not need to
-                // declare all parameter info.
-                if (tag(Layer) != .trainable) {
+                if (!Layer.info.trainable) {
                     range.* = Range{ .from = offset, .len = 0 };
                 } else {
                     // In this branch we need to pad with some f32.
-                    const alignment = Layer.parameter_alignment;
+                    const alignment = Layer.info.parameter_alignment.?;
                     assert(alignment % @alignOf(f32) == 0);
                     // Fixme: Compute directly instead of this stupid loop.
                     while ((@alignOf(f32) * offset) % alignment != 0) {
                         offset += 1;
                     }
-                    range.* = Range{ .from = offset, .len = Layer.parameter_count };
+                    range.* = Range{ .from = offset, .len = Layer.info.parameter_count.? };
                     offset += range.len;
                 }
             }
@@ -256,17 +159,17 @@ pub fn Network(Layers: []const type) type {
 
         pub const LayerLast = Layers[Layers.len - 1];
         pub const LayerFirst = Layers[0];
-        pub const dim_in = LayerFirst.dim_in;
-        pub const dim_out = LayerLast.dim_out;
-        pub const ItemIn = LayerFirst.ItemIn;
-        pub const ItemOut = LayerLast.ItemOut;
+        pub const dim_in = LayerFirst.info.dim_in;
+        pub const dim_out = LayerLast.info.dim_out;
+        pub const ItemIn = LayerFirst.info.ItemIn;
+        pub const ItemOut = LayerLast.info.ItemOut;
 
         pub const Input = [dim_in]ItemIn;
         pub const Output = [dim_out]ItemOut;
 
         const buffer_alignment = blk: {
             var max: usize = 0;
-            for (Layers) |Layer| max = @max(max, @alignOf(LayerOutput(Layer)));
+            for (Layers) |Layer| max = @max(max, @alignOf(Layer.info.Output()));
             break :blk max;
         };
         const buffer_size = blk: {
@@ -274,8 +177,8 @@ pub fn Network(Layers: []const type) type {
             // Fixme: @sizeOf(LayerInput(Layer)) is only required because we do not have a
             // backwardPassFinal function.
             for (Layers) |Layer| max = @max(max, @max(
-                @sizeOf(LayerInput(Layer)),
-                @sizeOf(LayerOutput(Layer)),
+                @sizeOf(Layer.info.Input()),
+                @sizeOf(Layer.info.Output()),
             ));
             break :blk max;
         };
@@ -285,13 +188,6 @@ pub fn Network(Layers: []const type) type {
         /// In either case one only needs to store the result of the previous
         /// layer's computation and pass it to the next. A double buffer facilitates this.
         buffer: DoubleBuffer(buffer_size, buffer_alignment),
-
-        fn LayerInput(Layer: type) type {
-            return [Layer.dim_in]Layer.ItemIn;
-        }
-        fn LayerOutput(Layer: type) type {
-            return [Layer.dim_out]Layer.ItemOut;
-        }
 
         pub fn writeToFile(parameters: *[parameter_count]f32, path: []const u8) !void {
             const file = try std.fs.cwd().createFile(path, .{});
@@ -307,18 +203,35 @@ pub fn Network(Layers: []const type) type {
             }
         }
 
+        pub fn readFromFile(parameters: *[parameter_count]f32, path: []const u8) !void {
+            const file = try std.fs.cwd().openFile(path, .{});
+            defer file.close();
+
+            var buffered = std.io.bufferedReader(file.reader());
+            var reader = buffered.reader();
+            inline for (parameter_ranges) |range| {
+                if (range.len > 0) {
+                    const slice = parameters[range.from..range.to()];
+                    _ = try reader.readAll(std.mem.sliceAsBytes(slice));
+                }
+            }
+        }
+
         /// Evaluates the network, layer by layer.
         pub fn eval(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
             inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
-                const layer_output = buffer.back(LayerOutput(Layer));
-                if (comptime tag(Layer) == .namespace) {
-                    Layer.eval(layer_input, layer_output);
+                const input_buffer = if (l == 0) input else buffer.front(Layer.info.Input());
+                const output_buffer: *Layer.info.Output() = if (Layer.info.in_place)
+                    @constCast(buffer.front(Layer.info.Output()))
+                else
+                    buffer.back(Layer.info.Output());
+                if (Layer.info.statefull) {
+                    layer.eval(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 } else {
-                    layer.eval(layer_input, layer_output);
+                    Layer.eval(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 }
-                buffer.flip();
+                if (!Layer.info.in_place) buffer.flip();
             }
             return buffer.front(Output);
         }
@@ -346,18 +259,18 @@ pub fn Network(Layers: []const type) type {
         /// Gives the parameters back, postprocessing them, if necessary.
         pub fn giveParameters(self: *Self) void {
             inline for (Layers, &self.layers) |Layer, *layer| {
-                if (comptime tag(Layer) == .trainable) layer.giveParameters();
+                if (Layer.info.trainable) layer.giveParameters();
             }
         }
 
         pub fn init(self: *Self, parameters: *[parameter_count]f32) void {
             inline for (Layers, &self.layers, parameter_ranges) |Layer, *layer, range| {
-                if (@sizeOf(Layer) == 0) continue;
-                if (range.len > 0) {
+                if (!Layer.info.statefull) continue;
+                if (Layer.info.trainable) {
                     const slice: *[range.len]f32 = @alignCast(
                         @ptrCast(parameters[range.from..range.to()]),
                     );
-                    layer.init(slice);
+                    layer.init(@alignCast(@ptrCast(slice)));
                 } else {
                     layer.init();
                 }
@@ -368,14 +281,17 @@ pub fn Network(Layers: []const type) type {
         pub fn forwardPass(self: *Self, input: *const Input) *const Output {
             const buffer = &self.buffer;
             inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
-                const layer_input = if (l == 0) input else buffer.front(LayerInput(Layer));
-                const layer_output = buffer.back(LayerOutput(Layer));
-                if (@sizeOf(Layer) > 0) {
-                    layer.forwardPass(layer_input, layer_output);
+                const input_buffer = if (l == 0) input else buffer.front(Layer.info.Input());
+                const output_buffer: *Layer.info.Output() = if (comptime Layer.info.in_place)
+                    @constCast(buffer.front(Layer.info.Output()))
+                else
+                    buffer.back(Layer.info.Output());
+                if (Layer.info.statefull) {
+                    layer.forwardPass(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 } else {
-                    Layer.forwardPass(layer_input, layer_output);
+                    Layer.forwardPass(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 }
-                buffer.flip();
+                if (comptime !Layer.info.in_place) buffer.flip();
             }
             return buffer.front(Output);
         }
@@ -394,18 +310,32 @@ pub fn Network(Layers: []const type) type {
                 l -= 1;
                 const Layer = Layers[l];
                 const layer = &self.layers[l];
-                const input = buffer.front([Layer.dim_out]f32);
-                const output = buffer.back([Layer.dim_in]f32);
+                const input = buffer.front([Layer.info.dim_out]f32);
+                const output: *[Layer.info.dim_in]f32 = if (Layer.info.in_place)
+                    @constCast(buffer.front([Layer.info.dim_in]f32))
+                else
+                    buffer.back([Layer.info.dim_in]f32);
                 const range = parameter_ranges[l];
-                if (@sizeOf(Layer) == 0) {
-                    Layer.backwardPass(input, output);
-                } else if (range.len == 0) {
-                    layer.backwardPass(input, output);
-                } else {
+                if (!Layer.info.statefull and l > 0) {
+                    Layer.backwardPass(@ptrCast(input), @ptrCast(output));
+                } else if (!Layer.info.trainable and l > 0) {
+                    layer.backwardPass(@ptrCast(input), @ptrCast(output));
+                } else if (Layer.info.trainable) {
                     const gradient_slice = gradient[range.from..range.to()];
-                    layer.backwardPass(input, @alignCast(@ptrCast(gradient_slice)), output);
+                    if (l == 0) {
+                        layer.backwardPassFinal(
+                            @ptrCast(input),
+                            @alignCast(@ptrCast(gradient_slice)),
+                        );
+                    } else {
+                        layer.backwardPass(
+                            @ptrCast(input),
+                            @alignCast(@ptrCast(gradient_slice)),
+                            @ptrCast(output),
+                        );
+                    }
                 }
-                buffer.flip();
+                if (!Layer.info.in_place) buffer.flip();
             }
         }
 

@@ -59,123 +59,61 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
 }
 
 const ConvolutionLogic = aesia.layer.ConvolutionLogic;
+const MultiLogicGate = aesia.layer.MultiLogicGate;
+const MultiLogicMax = aesia.layer.MultiLogicMax;
+const MultiLogicXOR = aesia.layer.MultiLogicXOR;
 const LogicLayer = aesia.layer.PackedLogic;
 const GroupSum = aesia.layer.GroupSum;
-const LUTConvolution = aesia.layer.LUTConvolution;
-const ButterflyMap = aesia.layer.ButterflyMap;
-const ZeroPad = aesia.layer.ZeroPad;
+const MaxPool = aesia.layer.MaxPool;
+const LUTConvolution = aesia.layer.LUTConvolutionPlies;
+const ButterflyMap = @import("dyadic_butterfly.zig").ButterflyMap;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
 const width = 32_000;
 const model_scale = 4;
 const Model = aesia.Model(&.{
-    //     LUTConvolution(.{
-    //         .depth = 1,
-    //         .height = 28,
-    //         .width = 28,
-    //         .lut_count = model_scale,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 2, .col = 2 },
-    //     }),
-    //     LUTConvolution(.{
-    //         .depth = model_scale,
-    //         .height = 14,
-    //         .width = 14,
-    //         .lut_count = 2,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 2, .col = 2 },
-    //     }),
-    //     LUTConvolution(.{
-    //         .depth = 2 * model_scale,
-    //         .height = 7,
-    //         .width = 7,
-    //         .lut_count = 2,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 1, .col = 1 },
-    //     }),
-    //     LUTConvolution(.{
-    //         .depth = 4 * model_scale,
-    //         .height = 6,
-    //         .width = 6,
-    //         .lut_count = 2,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 2, .col = 2 },
-    //     }),
-    //     aesia.layer.Repeat(8 * model_scale * 3 * 3, 8192),
-    // } ++ aesia.layer.BenesMap(13) ++
-    //     .{
-    //         aesia.layer.LogicSequential(4096),
-    //     } ++ aesia.layer.BenesMap(12) ++
-    //     .{
-    //         aesia.layer.LogicSequential(2048),
-    //     } ++ aesia.layer.BenesMap(11) ++
-    //     .{
-    //         aesia.layer.LogicSequential(1024),
-    //         GroupSum(1024, 10),
-    //     }, .{
-    aesia.layer.Repeat(784, 8192),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 0),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.LogicSequential(4096),
-    aesia.layer.Repeat(4096, 8192),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 0),
-    aesia.layer.LogicSequential(4096),
-    aesia.layer.Repeat(4096, 8192),
-    aesia.layer.ButterflyMap(13, 0),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.LogicSequential(4096),
-    GroupSum(4096, 10),
+    LUTConvolution(.{
+        .depth = 1,
+        .height = 28,
+        .width = 28,
+        .lut_count = model_scale,
+        .field_size = .{ .height = 3, .width = 3 },
+        .stride = .{ .row = 1, .col = 1 },
+    }),
+    LUTConvolution(.{
+        .depth = model_scale,
+        .height = 26,
+        .width = 26,
+        .lut_count = 1,
+        .field_size = .{ .height = 2, .width = 2 },
+        .stride = .{ .row = 2, .col = 2 },
+    }),
+    LUTConvolution(.{
+        .depth = model_scale,
+        .height = 13,
+        .width = 13,
+        .lut_count = 4,
+        .field_size = .{ .height = 3, .width = 3 },
+        .stride = .{ .row = 2, .col = 2 },
+    }),
+    LUTConvolution(.{
+        .depth = 4 * model_scale,
+        .height = 6,
+        .width = 6,
+        .lut_count = 4,
+        .field_size = .{ .height = 2, .width = 2 },
+        .stride = .{ .row = 2, .col = 2 },
+    }),
+    LogicLayer(16 * model_scale * 3 * 3, 32_000, .{ .rand = &rand }),
+    LogicLayer(32_000, 16_000, .{ .rand = &rand }),
+    LogicLayer(16_000, 8_000, .{ .rand = &rand }),
+    GroupSum(8000, 10),
 }, .{
     .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
-    .Optimizer = aesia.optimizer.Adam(.{
+    .Optimizer = aesia.optimizer.AdamW(.{
         .learn_rate = 0.05,
+        .weight_decay = 0.002,
     }),
 });
 var model: Model = undefined;
@@ -190,11 +128,11 @@ pub fn main() !void {
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
 
     // Load prior model.
-    std.debug.print("Loading latest mnist.model...", .{});
-    try model.readFromFile("mnist.model");
-    model.lock();
-    std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
-    model.unlock();
+    // std.debug.print("Loading latest lut-convolution.model...", .{});
+    // try model.readFromFile("lut-convolution.model");
+    // model.lock();
+    // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    // model.unlock();
 
     const training_count = 60_000;
     const validate_count = 10_000;
@@ -218,8 +156,8 @@ pub fn main() !void {
     );
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 30;
-    const batch_size = 128;
+    const epoch_count = 1;
+    const batch_size = 32;
     model.train(
         .init(images_training[0..training_count], labels_training[0..training_count]),
         .init(images_validate[0..validate_count], labels_validate[0..validate_count]),
@@ -246,6 +184,6 @@ pub fn main() !void {
     );
     std.debug.print("Training took: {d}min\n", .{timer.read() / std.time.ns_per_min});
 
-    std.debug.print("Writing model to mnist.model\n", .{});
-    try model.writeToFile("mnist.model");
+    std.debug.print("Writing model to lut-convolution.model\n", .{});
+    try model.writeToFile("lut-convolution.model");
 }
