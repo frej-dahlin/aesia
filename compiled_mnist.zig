@@ -134,13 +134,13 @@ const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
     PackedLogicLayer(16_000, 8_000, .{ .rand = &rand2, .gateRepresentation = rep }),
     GroupSum(8_000, 10, .{ .rand = &rand2, .gateRepresentation = rep }),
 });
-var network: Network = undefined;
-//var network: Network2 = undefined;
+//var network: Network = undefined;
+var network: Network2 = undefined;
 var convNetwork: ConvolutionalNetwork = undefined;
 
 pub fn main() !void {
-    try network.compileFromFile("mnist.model");
-    //try network.compileFromFile("mnist_packed.model");
+    //try network.compileFromFile("mnist.model");
+    try network.compileFromFile("mnist_packed.model");
     const allocator = std.heap.page_allocator;
     const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");

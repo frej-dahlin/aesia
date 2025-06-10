@@ -600,7 +600,6 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             for (0..lut_parameter_count) |i| {
                 for (0..lut_count) |k| {
                     self.expits[i][k] = (@round(1 / (1 + @exp(-parameters[i][k]))) != 0);
-                    //self.expits[i][k] = (@round(parameters[i][k]) != 0);
                 }
             }
         }
@@ -669,14 +668,7 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         ) void {
             // Collect receptions and find the activated indices.
             output.* = @splat(@splat(@splat(false)));
-
-            for (0..lut_count) |i| {
-                for (0..height_out) |j| {
-                    for (0..width_in) |k| {
-                        output[i][j][k] = false;
-                    }
-                }
-            }
+            
             for (0..height_out) |row| {
                 for (0..width_out) |col| {
                     const receptions = &self.receptions[row][col];
