@@ -4,7 +4,7 @@ const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
 const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.boolarray;
-const StaticBitSet = @import("bitset.zig").StaticBitSet;
+const StaticBitSet = @import("compiled_layer/bitset.zig").StaticBitSet;
 
 const aesia = @import("aesia.zig");
 
@@ -66,7 +66,7 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const compiled_layer = @import("compiled_layer.zig");
+const compiled_layer = @import("compiled_layer/logic.zig");
 const LogicLayer = compiled_layer.Logic;
 const PackedLogicLayer = compiled_layer.PackedLogic;
 const LUTConvolution = compiled_layer.LUTConvolutionPlies;
