@@ -579,7 +579,8 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         // all lookup tables given a certain input.
         expits: [lut_parameter_count][lut_count]bool,
         activations: [height_in][width_in][lut_arity + 1]ExpitIndex,
-        receptions: [height_out][width_out][lut_arity]bool,
+        //receptions: [height_out][width_out][lut_arity]bool,
+        receptions: [height_out][width_out][lut_arity]f32,
 
         pub fn init(_: *Self, parameters: *[lut_parameter_count][lut_count]bool) void {
             for (0..lut_parameter_count / 2) |i| {
@@ -599,7 +600,7 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
         ) void {
             for (0..lut_parameter_count) |i| {
                 for (0..lut_count) |k| {
-                    self.expits[i][k] = (@round(1 / (1 + @exp(-parameters[i][k]))) != 0);
+                    self.expits[i][k] = (@round(1.0 / (1.0 + @exp(-parameters[i][k]))) != 0);
                 }
             }
         }
@@ -625,7 +626,8 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             var max_index: ExpitIndex = 0;
             inline for (0..lut_arity) |j| {
                 const reception = &self.receptions[row][col];
-                max_index |= @as(ExpitIndex, if(reception[j]) 1 else 0) << j;
+                //max_index |= @as(ExpitIndex, if(reception[j]) 1 else 0) << j;
+                max_index |= @as(ExpitIndex, @intFromFloat(@round(reception[j]))) << j;
             }
             var activation_index: usize = 0;
             self.activations[row][col][activation_index] = max_index;
@@ -650,12 +652,15 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
             output: *[lut_count][height_out][width_out]bool,
         ) void {
             inline for (self.activations[row][col]) |index| {
-                var product: bool = true;
+                //var product: bool = true;
+                var prod: f32 = 1;
                 inline for (self.receptions[row][col], 0..) |x, bit| {
-                    product = product and (if ((index >> bit) & 1 != 0) x else !x);
+                    //product = product and (if ((index >> bit) & 1 != 0) x else 1-x);
+                    prod *= if ((index >> bit) & 1 != 0) @round(x) else @round(1 - x);
                 }
                 inline for (0..lut_count) |k| {
                     //output[k][row][col] = (output[k][row][col] or (self.expits[index][k] and product));
+                    const product: bool = (prod != 0); 
                     output[k][row][col] = (output[k][row][col] or (self.expits[index][k] and product)) and !(output[k][row][col] and (self.expits[index][k] and product));
                 }
             }
@@ -675,7 +680,8 @@ pub fn LUTConvolution(options: LUTConvolutionOptions) type {
                     const top_left = Point{ row * stride.row, col * stride.col };
                     inline for (receptions, receptive_offsets) |*reception, offset| {
                         const point = top_left + offset;
-                        reception.* = input[point[0]][point[1]];
+                        reception.* = if(input[point[0]][point[1]]) 1.0 else 0.0;
+                        //reception.* = input[point[0]][point[1]];
                     }
                     self.findActivations(row, col);
                 }

@@ -36,10 +36,10 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     for (images) |*image| {
         for (0..dim*dim) |k| {
             if(rep == .bitset){
-                image.setValue(k, if (try reader.readByte() > 0) true else false);
+                image.setValue(k, if (try reader.readByte() > 255/2) true else false);
             }
             else{
-                image[k] = if (try reader.readByte() > 0) true else false;
+                image[k] = if (try reader.readByte() >= 128) true else false;
             }
         }
     }
@@ -168,7 +168,7 @@ pub fn main() !void {
     std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].getEvalTime() / std.time.ns_per_us});
 
 
-    try convNetwork.compileFromFile("lut-convolution.model");
+    try convNetwork.compileFromFile("lut-convolution-discrete.model");
     timer = try std.time.Timer.start();
 
     correct_count = 0;
