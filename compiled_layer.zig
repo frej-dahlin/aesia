@@ -181,13 +181,6 @@ pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
             }
         }
 
-        pub fn getPermTime(self: *Self) u64 {
-            return self.permtime;
-        }
-        pub fn getEvalTime(self: *Self) u64 {
-            return self.evaltime;
-        }
-
         pub fn init(self: *Self, parameters: *[node_count]bool) void {
             self.* = .{
                 .sigma = null,
@@ -399,13 +392,6 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
             self.evaltime += evaltimer.read();
         }
 
-        pub fn getPermTime(self: *Self) u64 {
-            return self.permtime;
-        }
-        pub fn getEvalTime(self: *Self) u64 {
-            return self.evaltime;
-        }
-
     };
 }
 /// Divides the input into dim_out #buckets, each output is the sequential sum of
@@ -501,9 +487,12 @@ pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
             input: *const Input,
             noalias output: *Output,
         ) void {
+
+            var evaltimer = std.time.Timer.start() catch unreachable;
             for (0..depth_in) |ply| {
                 self.plies[ply].eval(&input[ply], &output[ply]);
             }
+            self.evaltime += evaltimer.read();
         }
 
         pub fn compile(
@@ -519,16 +508,6 @@ pub fn LUTConvolutionPlies(options: LUTConvolutionPliesOptions) type {
         ) void {
             for (0..depth_in) |ply| self.plies[ply].init(&parameters[ply]);
         }
-
-
-
-        pub fn getPermTime(self: *Self) u64 {
-            return self.permtime;
-        }
-        pub fn getEvalTime(self: *Self) u64 {
-            return self.evaltime;
-        }
-
     };
 }
 

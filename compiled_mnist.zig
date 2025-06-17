@@ -164,8 +164,8 @@ pub fn main() !void {
     );
     std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 
-    std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].getPermTime() / std.time.ns_per_ms});
-    std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].getEvalTime() / std.time.ns_per_us});
+    std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].permtime / std.time.ns_per_ms});
+    std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].evaltime / std.time.ns_per_us});
 
 
     try convNetwork.compileFromFile("lut-convolution-discrete.model");
@@ -188,6 +188,6 @@ pub fn main() !void {
     );
     std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 
-    std.debug.print("Permutation took: {d}ms\n", .{convNetwork.layers[1].getPermTime() / std.time.ns_per_ms});
-    std.debug.print("Gate evaluation took: {d}us\n", .{convNetwork.layers[1].getEvalTime() / std.time.ns_per_us});
+    std.debug.print("Permutation took: {d}ms\n", .{convNetwork.layers[1].permtime / std.time.ns_per_ms});
+    std.debug.print("Gate evaluation took: {d}us\n", .{convNetwork.layers[1].evaltime / std.time.ns_per_us});
 }
