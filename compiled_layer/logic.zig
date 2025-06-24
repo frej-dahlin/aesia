@@ -518,6 +518,38 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
 
         field: usize = 1,
 
+        const mask_from_indices = blk: {
+            var from_indices: [dim_out]usize = undefined;
+            for (&from_indices, 0..) |*from_index, k| {
+                const from = k * quot;
+                const from_mask_index = Input.maskIndex(from);
+                from_index.* = from_mask_index;
+            }
+            break :blk from_indices;
+        };
+
+        const mask_to_indices = blk: {
+            var to_indices: [dim_out]usize = undefined;
+            for (&to_indices, 0..) |*to_index, k| {
+                const from = k * quot;
+                const to = from + quot;
+                const to_mask_index = Input.maskIndex(to);
+                to_index.* = to_mask_index;
+            }
+            break :blk to_indices;
+        };
+
+        //Brian Kernighan's algorithm to count number of bits in number, complexity log(a)
+        fn nbits(a : usize) usize {
+            var count : usize = 0;
+            var b : usize = a;
+            while(a > 0) {
+                b = b & (b - 1);
+                count += 1;
+            }
+
+            return count;
+        }
         pub fn eval(_: *Self, input: *const Input, output: *Output) void {
             @memset(output, 0);
             for (output, 0..) |*coord, k| {
@@ -526,6 +558,7 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
 
                 if (options.gateRepresentation == .bitset) {
                     for (from..to) |l| coord.* += if (input.isSet(l)) 1 else 0;
+                    //for (mask_from_indices[k]..mask_to_indices[k]) |l| coord.* += nbits(input.masks[l]); 
                 } else {
                     for (from..to) |l| coord.* += if (input[l]) 1 else 0;
                 }
