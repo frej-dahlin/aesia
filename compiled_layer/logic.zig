@@ -414,7 +414,7 @@ pub fn LogicSequential(gate_count: usize, options: Options) type {
         pub const dim_out = gate_count;        
 
 
-        pub const Input = if (options.gateRepresentation == .bitset) [2]StaticBitSet(dim_in) else [gate_count][2]bool;
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [gate_count][2]bool;
         pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [gate_count]bool;
         pub const BitSet = StaticBitSet(gate_count);
 
@@ -432,15 +432,25 @@ pub fn LogicSequential(gate_count: usize, options: Options) type {
             output: *Output,
         ) void {
             if (options.gateRepresentation == .bitset) {
-                for (0..self.input1.masks.len) |i| {
-                    const a = self.input1.masks[i];
-                    const b = self.input2.masks[i];
-                    const beta0 = self.beta0.masks[i];
-                    const beta1 = self.beta1.masks[i];
-                    const beta2 = self.beta2.masks[i];
-                    const beta3 = self.beta3.masks[i];
+                // for (0..output.masks.len) |i| {
+                //     const a : usize = input.masks[i];
+                //     const b : usize  = 0;//input.masks[gate_count+i];
+                //     const beta0 = self.beta0.masks[i];
+                //     const beta1 = self.beta1.masks[i];
+                //     const beta2 = self.beta2.masks[i];
+                //     const beta3 = self.beta3.masks[i];
                     
-                    output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+                //     output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+                // }
+                for (0..gate_count) |i| {
+                    const a = input.isSet(2*i);
+                    const b = input.isSet(2*i+1);
+                    const beta0 = self.beta0.isSet(i);
+                    const beta1 = self.beta1.isSet(i);
+                    const beta2 = self.beta2.isSet(i);
+                    const beta3 = self.beta3.isSet(i);
+
+                    output.setValue(i,  (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3));
                 }
             } else {
                 for (0..gate_count) |i| {

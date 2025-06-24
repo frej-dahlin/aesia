@@ -58,7 +58,7 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
 
         const copy_count = dim_out / dim_in;
 
-        pub fn eval(input: *const [dim_in]bool, output: *[dim_out]bool) void {
+        pub fn eval(input: *const Input, output: *Output) void {
             if (options.gateRepresentation == .bitset) {
                 for (0..copy_count) |k| {
                     const from = k * dim_in;
@@ -66,6 +66,9 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
                     for (from..to, 0..to-from) |i, j| {
                         output.setValue(i, input.isSet(j));
                     }
+                }
+                for (copy_count * dim_in..dim_out) |i| {
+                    output.setValue(i, false);
                 }
             } else {
                 for (0..copy_count) |k| {

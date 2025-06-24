@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
-const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.boolarray;
+const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.bitset;
 const StaticBitSet = @import("compiled_layer/bitset.zig").StaticBitSet;
 
 const aesia = @import("aesia.zig");
@@ -27,7 +27,6 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     assert(try reader.readByte() == 0x08); // 0x08 means bytes.
     assert(try reader.readByte() == 0x03); // Three dimensios, image count, rows, and columns.
     const image_count = try reader.readInt(u32, .big);
-    std.debug.print("Reading {d} images...\n", .{image_count});
     const row_count = try reader.readInt(u32, .big);
     const col_count = try reader.readInt(u32, .big);
     assert(row_count == dim);
@@ -36,7 +35,7 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     for (images) |*image| {
         for (0..dim*dim) |k| {
             if(rep == .bitset){
-                image.setValue(k, if (try reader.readByte() > 255/2) true else false);
+                image.setValue(k, if (try reader.readByte() >= 128) true else false);
             }
             else{
                 image[k] = if (try reader.readByte() >= 128) true else false;
@@ -97,7 +96,7 @@ const width2 = 24000;
 const Network2 = @import("compiled_network.zig").Network(&.{
     PackedLogicLayer(784, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
     PackedLogicLayer(width2, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
-    GroupSum(width2, 10, .{ .rand = &rand, .gateRepresentation = rep }),
+    GroupSum(width2, 10, .{.gateRepresentation = rep }),
 });
 
 

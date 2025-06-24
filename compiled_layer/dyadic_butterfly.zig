@@ -106,7 +106,12 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
 
         pub fn compile(self: *Self, parameters: *[parameter_count]f32) void {
             for (0..parameter_count) |j| {
-                self.steer[j] = @round(1 / (1 + @exp(-parameters[j]))) != 0;
+                if (options.gateRepresentation == .bitset) {
+                    self.steer.setValue(j, @round(1 / (1 + @exp(-parameters[j]))) != 0);
+                }
+                else {
+                    self.steer[j] = @round(1 / (1 + @exp(-parameters[j]))) != 0;
+                }
             }
         }
 
