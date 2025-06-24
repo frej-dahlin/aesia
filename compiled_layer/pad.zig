@@ -3,14 +3,10 @@ const std = @import("std");
 const StaticBitSet = @import("bitset.zig").StaticBitSet;
 pub const logic = @import("logic.zig");
 
-// pub const GateRepresentation = enum {
-//     boolarray,
-//     bitset,
-// };
 pub const GateRepresentation = logic.GateRepresentation;
-pub const LogicOptions = struct { rand: *std.Random, gateRepresentation: GateRepresentation };
+pub const Options = struct {gateRepresentation: GateRepresentation };
 
-pub fn ZeroPad(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
+pub fn ZeroPad(dim_in_: usize, dim_out_: usize, options: Options) type {
     if (dim_in_ >= dim_out_) @compileError("ZeroPad: dim_in must be less than dim_out");
     return struct {
         const Self = @This();
@@ -37,7 +33,7 @@ pub fn ZeroPad(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
     };
 }
 
-pub fn Repeat(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
+pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
     return struct {
         const Self = @This();
 

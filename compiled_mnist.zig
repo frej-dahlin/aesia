@@ -102,7 +102,7 @@ const Network2 = @import("compiled_network.zig").Network(&.{
 
 
 const Network3 = @import("compiled_network.zig").Network(&.{
-    Repeat(784, 8192, .{ .rand = &rand, .gateRepresentation = rep  }),
+    Repeat(784, 8192, .{ .gateRepresentation = rep  }),
     ButterflyMap(13, 12),
     ButterflyMap(13, 11),
     ButterflyMap(13, 10),
@@ -128,8 +128,8 @@ const Network3 = @import("compiled_network.zig").Network(&.{
     ButterflyMap(13, 10),
     ButterflyMap(13, 11),
     ButterflyMap(13, 12),
-    LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
-    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep  }),
+    LogicSequential(4096, .{ .gateRepresentation = rep  }),
+    Repeat(4096, 8192, .{.gateRepresentation = rep  }),
     ButterflyMap(13, 12),
     ButterflyMap(13, 11),
     ButterflyMap(13, 10),
@@ -143,8 +143,8 @@ const Network3 = @import("compiled_network.zig").Network(&.{
     ButterflyMap(13, 2),
     ButterflyMap(13, 1),
     ButterflyMap(13, 0),
-    LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
-    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep  }),
+    LogicSequential(4096, .{ .gateRepresentation = rep  }),
+    Repeat(4096, 8192, .{.gateRepresentation = rep  }),
     ButterflyMap(13, 0),
     ButterflyMap(13, 1),
     ButterflyMap(13, 2),
@@ -158,8 +158,8 @@ const Network3 = @import("compiled_network.zig").Network(&.{
     ButterflyMap(13, 10),
     ButterflyMap(13, 11),
     ButterflyMap(13, 12),
-    LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
-    GroupSum(4096, 10, .{ .rand = &rand, .gateRepresentation = rep }),
+    LogicSequential(4096, .{ .gateRepresentation = rep  }),
+    GroupSum(4096, 10, .{ .gateRepresentation = rep }),
 });
 
 const model_scale = 4;
@@ -199,7 +199,7 @@ const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
     PackedLogicLayer(16 * model_scale * 3 * 3, 32_000, .{ .rand = &rand2, .gateRepresentation = rep }),
     PackedLogicLayer(32_000, 16_000, .{ .rand = &rand2, .gateRepresentation = rep }),
     PackedLogicLayer(16_000, 8_000, .{ .rand = &rand2, .gateRepresentation = rep }),
-    GroupSum(8_000, 10, .{ .rand = &rand2, .gateRepresentation = rep }),
+    GroupSum(8_000, 10, .{ .gateRepresentation = rep }),
 });
 //var network: Network = undefined;
 //var network: Network2 = undefined;

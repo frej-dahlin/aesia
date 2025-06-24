@@ -34,6 +34,7 @@ pub const GateRepresentation = enum {
 };
 
 pub const LogicOptions = struct { rand: *std.Random, gateRepresentation: GateRepresentation };
+pub const Options = struct { gateRepresentation: GateRepresentation };
 
 pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
     return struct {
@@ -396,7 +397,7 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
 }
 
 
-pub fn LogicSequential(gate_count: usize, options: LogicOptions) type {
+pub fn LogicSequential(gate_count: usize, options: Options) type {
     return struct {
         const Self = @This();
 
@@ -468,7 +469,7 @@ pub fn LogicSequential(gate_count: usize, options: LogicOptions) type {
 
 /// Divides the input into dim_out #buckets, each output is the sequential sum of
 /// dim_in / dim_out items of the input.
-pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
+pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
     return struct {
         const Self = @This();
 
