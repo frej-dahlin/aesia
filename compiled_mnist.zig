@@ -4,7 +4,6 @@ const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
 const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.boolarray;
-const rep_pad : compiled_layer_pad.GateRepresentation = compiled_layer_pad.GateRepresentation.boolarray;
 const StaticBitSet = @import("compiled_layer/bitset.zig").StaticBitSet;
 
 const aesia = @import("aesia.zig");
@@ -103,7 +102,7 @@ const Network2 = @import("compiled_network.zig").Network(&.{
 
 
 const Network3 = @import("compiled_network.zig").Network(&.{
-    Repeat(784, 8192, .{ .rand = &rand, .gateRepresentation = rep_pad  }),
+    Repeat(784, 8192, .{ .rand = &rand, .gateRepresentation = rep  }),
     ButterflyMap(13, 12),
     ButterflyMap(13, 11),
     ButterflyMap(13, 10),
@@ -130,7 +129,7 @@ const Network3 = @import("compiled_network.zig").Network(&.{
     ButterflyMap(13, 11),
     ButterflyMap(13, 12),
     LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
-    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep_pad  }),
+    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep  }),
     ButterflyMap(13, 12),
     ButterflyMap(13, 11),
     ButterflyMap(13, 10),
@@ -145,7 +144,7 @@ const Network3 = @import("compiled_network.zig").Network(&.{
     ButterflyMap(13, 1),
     ButterflyMap(13, 0),
     LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
-    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep_pad  }),
+    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep  }),
     ButterflyMap(13, 0),
     ButterflyMap(13, 1),
     ButterflyMap(13, 2),

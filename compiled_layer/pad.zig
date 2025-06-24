@@ -1,11 +1,13 @@
 const std = @import("std");
 
 const StaticBitSet = @import("bitset.zig").StaticBitSet;
+pub const logic = @import("logic.zig");
 
-pub const GateRepresentation = enum {
-    boolarray,
-    bitset,
-};
+// pub const GateRepresentation = enum {
+//     boolarray,
+//     bitset,
+// };
+pub const GateRepresentation = logic.GateRepresentation;
 pub const LogicOptions = struct { rand: *std.Random, gateRepresentation: GateRepresentation };
 
 pub fn ZeroPad(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
@@ -41,7 +43,7 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
 
         // const parameter_count = 0;
         // const parameter_alignment = 64;
-        
+
         pub const ItemIn = bool;
         pub const ItemOut = bool;
         pub const dim_in = dim_in_;
