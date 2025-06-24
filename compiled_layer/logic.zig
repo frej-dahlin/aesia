@@ -364,18 +364,22 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
         pub fn eval(noalias self: *Self, noalias input: *const Input, noalias output: *Output) void {
             var permtimer = std.time.Timer.start() catch unreachable;
             if (options.gateRepresentation == .bitset) {
-                for (0..node_count) |k| {
-                    const a = input.isSet(self.parents[k][0]);
-                    const b = input.isSet(self.parents[k][1]);
-                    self.input1.setValue(k, a);
-                    self.input2.setValue(k, b);
+                for (0..node_count) |i| {
+                    const a = self.input1.masks[i];
+                    const b = self.input2.masks[i];
+                    const beta0 = self.beta0.masks[i];
+                    const beta1 = self.beta1.masks[i];
+                    const beta2 = self.beta2.masks[i];
+                    const beta3 = self.beta3.masks[i];
+
+                    output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
                 }
             } else {
-                for (0..node_count) |k| {
-                    const a = input[self.parents[k][0]];
-                    const b = input[self.parents[k][1]];
-                    self.input1[k] = a;
-                    self.input2[k] = b;
+                for (0..node_count) |i| {
+                    const a = input[self.parents[i][0]];
+                    const b = input[self.parents[i][1]];
+                    self.input1[i] = a;
+                    self.input2[i] = b;
                 }
             }
 
@@ -410,8 +414,8 @@ pub fn LogicSequential(gate_count: usize, options: Options) type {
         pub const dim_out = gate_count;        
 
 
-        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
-        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
+        pub const Input = if (options.gateRepresentation == .bitset) [2]StaticBitSet(dim_in) else [gate_count][2]bool;
+        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [gate_count]bool;
         pub const BitSet = StaticBitSet(gate_count);
 
         luts: [gate_count]f32x4,
@@ -424,17 +428,31 @@ pub fn LogicSequential(gate_count: usize, options: Options) type {
 
         pub fn eval(
             self: *const Self,
-            input: *const [gate_count][2]bool,
-            output: *[gate_count]bool,
+            input: *const Input,
+            output: *Output,
         ) void {
-            for (0..gate_count) |i| {
-                const a, const b = input[i];
-                const beta0 = self.beta0[i];
-                const beta1 = self.beta1[i];
-                const beta2 = self.beta2[i];
-                const beta3 = self.beta3[i];
+            if (options.gateRepresentation == .bitset) {
+                for (0..gate_count) |i| {
+                    const a = self.input1.masks[i];
+                    const b = self.input2.masks[i];
+                    const beta0 = self.beta0.masks[i];
+                    const beta1 = self.beta1.masks[i];
+                    const beta2 = self.beta2.masks[i];
+                    const beta3 = self.beta3.masks[i];
+                    
+                    output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
+                }
+            } else {
+                for (0..gate_count) |i| {
+                    const a = input[i][0];
+                    const b = input[i][1];
+                    const beta0 = self.beta0[i];
+                    const beta1 = self.beta1[i];
+                    const beta2 = self.beta2[i];
+                    const beta3 = self.beta3[i];
 
-                output[i] = (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3);
+                    output[i] = (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3);
+                }
             }
         }
 
