@@ -103,108 +103,108 @@ const Network2 = @import("compiled_network.zig").Network(&.{
 
 const Network3 = @import("compiled_network.zig").Network(&.{
     Repeat(784, 8192, .{ .gateRepresentation = rep  }),
-    ButterflyMap(13, 12),
-    ButterflyMap(13, 11),
-    ButterflyMap(13, 10),
-    ButterflyMap(13, 9),
-    ButterflyMap(13, 8),
-    ButterflyMap(13, 7),
-    ButterflyMap(13, 6),
-    ButterflyMap(13, 5),
-    ButterflyMap(13, 4),
-    ButterflyMap(13, 3),
-    ButterflyMap(13, 2),
-    ButterflyMap(13, 1),
-    ButterflyMap(13, 0),
-    ButterflyMap(13, 1),
-    ButterflyMap(13, 2),
-    ButterflyMap(13, 3),
-    ButterflyMap(13, 4),
-    ButterflyMap(13, 5),
-    ButterflyMap(13, 6),
-    ButterflyMap(13, 7),
-    ButterflyMap(13, 8),
-    ButterflyMap(13, 9),
-    ButterflyMap(13, 10),
-    ButterflyMap(13, 11),
-    ButterflyMap(13, 12),
+    ButterflyMap(13, 12, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 11, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 10, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 9, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 8, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 7, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 6, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 5, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 4, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 3, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 2, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 1, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 0, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 1, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 2, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 3, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 4, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 5, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 6, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 7, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 8, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 9, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 10, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 11, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 12, .{ .gateRepresentation = rep  }),
     LogicSequential(4096, .{ .gateRepresentation = rep  }),
     Repeat(4096, 8192, .{.gateRepresentation = rep  }),
-    ButterflyMap(13, 12),
-    ButterflyMap(13, 11),
-    ButterflyMap(13, 10),
-    ButterflyMap(13, 9),
-    ButterflyMap(13, 8),
-    ButterflyMap(13, 7),
-    ButterflyMap(13, 6),
-    ButterflyMap(13, 5),
-    ButterflyMap(13, 4),
-    ButterflyMap(13, 3),
-    ButterflyMap(13, 2),
-    ButterflyMap(13, 1),
-    ButterflyMap(13, 0),
+    ButterflyMap(13, 12, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 11, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 10, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 9, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 8, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 7, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 6, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 5, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 4, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 3, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 2, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 1, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 0, .{ .gateRepresentation = rep  }),
     LogicSequential(4096, .{ .gateRepresentation = rep  }),
     Repeat(4096, 8192, .{.gateRepresentation = rep  }),
-    ButterflyMap(13, 0),
-    ButterflyMap(13, 1),
-    ButterflyMap(13, 2),
-    ButterflyMap(13, 3),
-    ButterflyMap(13, 4),
-    ButterflyMap(13, 5),
-    ButterflyMap(13, 6),
-    ButterflyMap(13, 7),
-    ButterflyMap(13, 8),
-    ButterflyMap(13, 9),
-    ButterflyMap(13, 10),
-    ButterflyMap(13, 11),
-    ButterflyMap(13, 12),
+    ButterflyMap(13, 0, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 1, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 2, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 3, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 4, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 5, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 6, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 7, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 8, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 9, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 10, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 11, .{ .gateRepresentation = rep  }),
+    ButterflyMap(13, 12, .{ .gateRepresentation = rep  }),
     LogicSequential(4096, .{ .gateRepresentation = rep  }),
     GroupSum(4096, 10, .{ .gateRepresentation = rep }),
 });
 
 const model_scale = 4;
-const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
-    LUTConvolution(.{
-        .depth = 1,
-        .height = 28,
-        .width = 28,
-        .lut_count = model_scale,
-        .field_size = .{ .height = 3, .width = 3 },
-        .stride = .{ .row = 1, .col = 1 },
-    }),
-    LUTConvolution(.{
-        .depth = model_scale,
-        .height = 26,
-        .width = 26,
-        .lut_count = 1,
-        .field_size = .{ .height = 2, .width = 2 },
-        .stride = .{ .row = 2, .col = 2 },
-    }),
-    LUTConvolution(.{
-        .depth = model_scale,
-        .height = 13,
-        .width = 13,
-        .lut_count = 4,
-        .field_size = .{ .height = 3, .width = 3 },
-        .stride = .{ .row = 2, .col = 2 },
-    }),
-    LUTConvolution(.{
-        .depth = 4 * model_scale,
-        .height = 6,
-        .width = 6,
-        .lut_count = 4,
-        .field_size = .{ .height = 2, .width = 2 },
-        .stride = .{ .row = 2, .col = 2 },
-    }),
-    PackedLogicLayer(16 * model_scale * 3 * 3, 32_000, .{ .rand = &rand2, .gateRepresentation = rep }),
-    PackedLogicLayer(32_000, 16_000, .{ .rand = &rand2, .gateRepresentation = rep }),
-    PackedLogicLayer(16_000, 8_000, .{ .rand = &rand2, .gateRepresentation = rep }),
-    GroupSum(8_000, 10, .{ .gateRepresentation = rep }),
-});
+// const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
+//     LUTConvolution(.{
+//         .depth = 1,
+//         .height = 28,
+//         .width = 28,
+//         .lut_count = model_scale,
+//         .field_size = .{ .height = 3, .width = 3 },
+//         .stride = .{ .row = 1, .col = 1 },
+//     }),
+//     LUTConvolution(.{
+//         .depth = model_scale,
+//         .height = 26,
+//         .width = 26,
+//         .lut_count = 1,
+//         .field_size = .{ .height = 2, .width = 2 },
+//         .stride = .{ .row = 2, .col = 2 },
+//     }),
+//     LUTConvolution(.{
+//         .depth = model_scale,
+//         .height = 13,
+//         .width = 13,
+//         .lut_count = 4,
+//         .field_size = .{ .height = 3, .width = 3 },
+//         .stride = .{ .row = 2, .col = 2 },
+//     }),
+//     LUTConvolution(.{
+//         .depth = 4 * model_scale,
+//         .height = 6,
+//         .width = 6,
+//         .lut_count = 4,
+//         .field_size = .{ .height = 2, .width = 2 },
+//         .stride = .{ .row = 2, .col = 2 },
+//     }),
+//     PackedLogicLayer(16 * model_scale * 3 * 3, 32_000, .{ .rand = &rand2, .gateRepresentation = rep }),
+//     PackedLogicLayer(32_000, 16_000, .{ .rand = &rand2, .gateRepresentation = rep }),
+//     PackedLogicLayer(16_000, 8_000, .{ .rand = &rand2, .gateRepresentation = rep }),
+//     GroupSum(8_000, 10, .{ .gateRepresentation = rep }),
+// });
 //var network: Network = undefined;
 //var network: Network2 = undefined;
 var network: Network3 = undefined;
-var convNetwork: ConvolutionalNetwork = undefined;
+//var convNetwork: ConvolutionalNetwork = undefined;
 
 pub fn main() !void {
     //try network.compileFromFile("mnist.model");
@@ -237,26 +237,26 @@ pub fn main() !void {
     //std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].evaltime / std.time.ns_per_us});
 
 
-    try convNetwork.compileFromFile("lut-convolution-discrete.model");
-    timer = try std.time.Timer.start();
+    // try convNetwork.compileFromFile("lut-convolution-discrete.model");
+    // timer = try std.time.Timer.start();
 
-    correct_count = 0;
-    for (images_validate, labels_validate) |image, label| {
-        const prediction = convNetwork.eval(&image);
-        if (std.mem.indexOfMax(usize, prediction) == label) correct_count += 1;
-    }
+    // correct_count = 0;
+    // for (images_validate, labels_validate) |image, label| {
+    //     const prediction = convNetwork.eval(&image);
+    //     if (std.mem.indexOfMax(usize, prediction) == label) correct_count += 1;
+    // }
 
-    std.debug.print(
-        "Correctly classified {d} / {d} ~ {d}%\n",
-        .{
-            correct_count,
-            images_validate.len,
-            100 * @as(f32, @floatFromInt(correct_count)) /
-                @as(f32, @floatFromInt(images_validate.len)),
-        },
-    );
-    std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    // std.debug.print(
+    //     "Correctly classified {d} / {d} ~ {d}%\n",
+    //     .{
+    //         correct_count,
+    //         images_validate.len,
+    //         100 * @as(f32, @floatFromInt(correct_count)) /
+    //             @as(f32, @floatFromInt(images_validate.len)),
+    //     },
+    // );
+    // std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 
-    std.debug.print("Permutation took: {d}ms\n", .{convNetwork.layers[1].permtime / std.time.ns_per_ms});
-    std.debug.print("Gate evaluation took: {d}us\n", .{convNetwork.layers[1].evaltime / std.time.ns_per_us});
+    // std.debug.print("Permutation took: {d}ms\n", .{convNetwork.layers[1].permtime / std.time.ns_per_ms});
+    // std.debug.print("Gate evaluation took: {d}us\n", .{convNetwork.layers[1].evaltime / std.time.ns_per_us});
 }

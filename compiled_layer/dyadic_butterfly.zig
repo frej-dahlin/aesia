@@ -1,5 +1,11 @@
 const aesia = @import("../aesia.zig");
 
+const StaticBitSet = @import("bitset.zig").StaticBitSet;
+pub const logic = @import("logic.zig");
+
+pub const GateRepresentation = logic.GateRepresentation;
+pub const Options = struct {gateRepresentation: GateRepresentation };
+
 /// A dyadic butterfly swap is one layer of a permutation network,
 /// such as a butterfly diagram. It only accepts perfect powers of two, hence the layer is
 /// specified by the parameter log2_dim, there are log2_dim possible 'stages'.
@@ -11,7 +17,7 @@ const aesia = @import("../aesia.zig");
 /// Depending on its 2 steering bits a and b will possibly swap positions, and c and d
 /// will possibly swap positions. A stage 1 2-DyadicCrossover will possibly swap a and c,
 /// and b and d, again depending on its 2 steering bits.
-pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
+pub fn ButterflySwap(log2_dim: usize, stage: usize, options: Options) type {
     // Compile time checks.
     if (log2_dim == 0) @compileError("DyadicCrossover: log2_dim must be nonzero");
     if (stage >= log2_dim) @compileError("DyadicCrossover: stage must be beetween 0 and log2_dim - 1, inclusive");
@@ -29,8 +35,8 @@ pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
         pub const dim_in = dim;
         pub const dim_out = dim;
 
-        pub const Input = [dim_in]bool;
-        pub const Output = [dim_out]bool;
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
+        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
 
         steer: [dim / 2]bool,
         input_buffer: [dim]bool,
@@ -70,7 +76,7 @@ pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
 /// specified by the parameter log2_dim, there are log2_dim possible 'stages'.
 /// Compared to ButterflySwap, this might not swap values, but instead reproduce one of the two
 /// values conditionally.
-pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
+pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
     // Compile time checks.
     if (log2_dim == 0) @compileError("DyadicCrossover: log2_dim must be nonzero");
     if (stage >= log2_dim) @compileError("DyadicCrossover: stage must be beetween 0 and log2_dim - 1, inclusive");
@@ -89,8 +95,8 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
         pub const dim_out = dim;
 
 
-        pub const Input = [dim_in]bool;
-        pub const Output = [dim_out]bool;
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
+        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
 
         steer: [dim]bool,
         input_buffer: [dim]bool,
