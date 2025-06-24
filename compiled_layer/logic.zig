@@ -432,7 +432,7 @@ pub fn LogicSequential(gate_count: usize, options: Options) type {
             output: *Output,
         ) void {
             if (options.gateRepresentation == .bitset) {
-                for (0..gate_count) |i| {
+                for (0..self.input1.masks.len) |i| {
                     const a = self.input1.masks[i];
                     const b = self.input2.masks[i];
                     const beta0 = self.beta0.masks[i];
