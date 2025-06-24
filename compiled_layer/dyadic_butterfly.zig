@@ -98,8 +98,7 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
         pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
         pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
 
-        steer: [dim]bool,
-        input_buffer: [dim]bool,
+        steer: Output,
 
         pub fn init(_: *Self, parameters: *[parameter_count]bool) void {
             @memset(parameters, -10);
@@ -111,22 +110,40 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
             }
         }
 
-        pub fn eval(self: *const Self, input: *const [dim]bool, output: *[dim]bool) void {
-            @setFloatMode(.optimized);
-            var steer_index: usize = 0;
-            for (0..dim >> (stage + 1)) |k| {
-                const from = 2 * k * delta;
-                const to = (2 * k + 1) * delta;
-                for (from..to) |j| {
-                    const a = input[j];
-                    const b = input[j + delta];
-                    const c = self.steer[steer_index];
-                    steer_index += 1;
-                    const d = self.steer[steer_index];
-                    steer_index += 1;
+        pub fn eval(self: *const Self, input: *const Input, output: *Output) void {
+            if (options.gateRepresentation == .bitset) {
+                var steer_index: usize = 0;
+                for (0..dim >> (stage + 1)) |k| {
+                    const from = 2 * k * delta;
+                    const to = (2 * k + 1) * delta;
+                    for (from..to) |j| {
+                        const a = input.isSet(j);
+                        const b = input.isSet(j + delta);
+                        const c = self.steer.isSet(steer_index);
+                        steer_index += 1;
+                        const d = self.steer.isSet(steer_index);
+                        steer_index += 1;
 
-                    output[j] = (!c and a) or (c and b);
-                    output[j + delta] = (d and a) or (!d and b);
+                        output.setValue(j, (!c and a) or (c and b));
+                        output.setValue(j + delta,  (d and a) or (!d and b));
+                    }
+                }
+            } else {
+                var steer_index: usize = 0;
+                for (0..dim >> (stage + 1)) |k| {
+                    const from = 2 * k * delta;
+                    const to = (2 * k + 1) * delta;
+                    for (from..to) |j| {
+                        const a = input[j];
+                        const b = input[j + delta];
+                        const c = self.steer[steer_index];
+                        steer_index += 1;
+                        const d = self.steer[steer_index];
+                        steer_index += 1;
+
+                        output[j] = (!c and a) or (c and b);
+                        output[j + delta] = (d and a) or (!d and b);
+                    }
                 }
             }
         }

@@ -25,10 +25,18 @@ pub fn ZeroPad(dim_in_: usize, dim_out_: usize, options: Options) type {
 
         pub fn init(_: *Self) void {}
 
-        pub fn eval(input: *const [dim_in]bool, output: *[dim_out]bool) void {
-            @setFloatMode(.optimized);
-            @memset(output[dim_in..], 0);
-            @memcpy(output[0..dim_in], input);
+        pub fn eval(input: *const Input, output: *Output) void {
+            if (options.gateRepresentation == .bitset) {
+                for (0..dim_in) |i|{
+                    output.setValue(i, input.isSet(i));
+                }
+                for (dim_in..dim_out) |i|{
+                    output.setValue(i, false);
+                }
+            } else {
+                @memset(output[dim_in..], false);
+                @memcpy(output[0..dim_in], input);
+            }
         }
     };
 }
@@ -51,12 +59,22 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
         const copy_count = dim_out / dim_in;
 
         pub fn eval(input: *const [dim_in]bool, output: *[dim_out]bool) void {
-            for (0..copy_count) |k| {
-                const from = k * dim_in;
-                const to = (k + 1) * dim_in;
-                @memcpy(output[from..to], input);
+            if (options.gateRepresentation == .bitset) {
+                for (0..copy_count) |k| {
+                    const from = k * dim_in;
+                    const to = (k + 1) * dim_in;
+                    for (from..to, 0..to-from) |i, j| {
+                        output.setValue(i, input.isSet(j));
+                    }
+                }
+            } else {
+                for (0..copy_count) |k| {
+                    const from = k * dim_in;
+                    const to = (k + 1) * dim_in;
+                    @memcpy(output[from..to], input);
+                }
+                @memset(output[copy_count * dim_in ..], false);
             }
-            @memset(output[copy_count * dim_in ..], false);
         }
     };
 }
