@@ -4,6 +4,7 @@ const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
 const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.boolarray;
+const rep_pad : compiled_layer_pad.GateRepresentation = compiled_layer_pad.GateRepresentation.boolarray;
 const StaticBitSet = @import("compiled_layer/bitset.zig").StaticBitSet;
 
 const aesia = @import("aesia.zig");
@@ -67,10 +68,15 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
 }
 
 const compiled_layer = @import("compiled_layer/logic.zig");
+const compiled_layer_pad = @import("compiled_layer/pad.zig");
+const compiled_layer_dyadic = @import("compiled_layer/dyadic_butterfly.zig");
 const LogicLayer = compiled_layer.Logic;
 const PackedLogicLayer = compiled_layer.PackedLogic;
+const LogicSequential = compiled_layer.LogicSequential;
 const LUTConvolution = compiled_layer.LUTConvolutionPlies;
 const GroupSum = compiled_layer.GroupSum;
+const Repeat = compiled_layer_pad.Repeat;
+const ButterflyMap = compiled_layer_dyadic.ButterflyMap;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
@@ -93,6 +99,68 @@ const Network2 = @import("compiled_network.zig").Network(&.{
     PackedLogicLayer(784, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
     PackedLogicLayer(width2, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
     GroupSum(width2, 10, .{ .rand = &rand, .gateRepresentation = rep }),
+});
+
+
+const Network3 = @import("compiled_network.zig").Network(&.{
+    Repeat(784, 8192, .{ .rand = &rand, .gateRepresentation = rep_pad  }),
+    ButterflyMap(13, 12),
+    ButterflyMap(13, 11),
+    ButterflyMap(13, 10),
+    ButterflyMap(13, 9),
+    ButterflyMap(13, 8),
+    ButterflyMap(13, 7),
+    ButterflyMap(13, 6),
+    ButterflyMap(13, 5),
+    ButterflyMap(13, 4),
+    ButterflyMap(13, 3),
+    ButterflyMap(13, 2),
+    ButterflyMap(13, 1),
+    ButterflyMap(13, 0),
+    ButterflyMap(13, 1),
+    ButterflyMap(13, 2),
+    ButterflyMap(13, 3),
+    ButterflyMap(13, 4),
+    ButterflyMap(13, 5),
+    ButterflyMap(13, 6),
+    ButterflyMap(13, 7),
+    ButterflyMap(13, 8),
+    ButterflyMap(13, 9),
+    ButterflyMap(13, 10),
+    ButterflyMap(13, 11),
+    ButterflyMap(13, 12),
+    LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
+    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep_pad  }),
+    ButterflyMap(13, 12),
+    ButterflyMap(13, 11),
+    ButterflyMap(13, 10),
+    ButterflyMap(13, 9),
+    ButterflyMap(13, 8),
+    ButterflyMap(13, 7),
+    ButterflyMap(13, 6),
+    ButterflyMap(13, 5),
+    ButterflyMap(13, 4),
+    ButterflyMap(13, 3),
+    ButterflyMap(13, 2),
+    ButterflyMap(13, 1),
+    ButterflyMap(13, 0),
+    LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
+    Repeat(4096, 8192, .{ .rand = &rand, .gateRepresentation = rep_pad  }),
+    ButterflyMap(13, 0),
+    ButterflyMap(13, 1),
+    ButterflyMap(13, 2),
+    ButterflyMap(13, 3),
+    ButterflyMap(13, 4),
+    ButterflyMap(13, 5),
+    ButterflyMap(13, 6),
+    ButterflyMap(13, 7),
+    ButterflyMap(13, 8),
+    ButterflyMap(13, 9),
+    ButterflyMap(13, 10),
+    ButterflyMap(13, 11),
+    ButterflyMap(13, 12),
+    LogicSequential(4096, .{ .rand = &rand, .gateRepresentation = rep  }),
+    GroupSum(4096, 10, .{ .rand = &rand, .gateRepresentation = rep }),
 });
 
 const model_scale = 4;
@@ -135,12 +203,14 @@ const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
     GroupSum(8_000, 10, .{ .rand = &rand2, .gateRepresentation = rep }),
 });
 //var network: Network = undefined;
-var network: Network2 = undefined;
+//var network: Network2 = undefined;
+var network: Network3 = undefined;
 var convNetwork: ConvolutionalNetwork = undefined;
 
 pub fn main() !void {
     //try network.compileFromFile("mnist.model");
-    try network.compileFromFile("mnist_packed.model");
+    //try network.compileFromFile("mnist_packed.model");
+    try network.compileFromFile("mnist_butterfly.model");
     const allocator = std.heap.page_allocator;
     const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
@@ -164,8 +234,8 @@ pub fn main() !void {
     );
     std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 
-    std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].permtime / std.time.ns_per_ms});
-    std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].evaltime / std.time.ns_per_us});
+    //std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].permtime / std.time.ns_per_ms});
+    //std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].evaltime / std.time.ns_per_us});
 
 
     try convNetwork.compileFromFile("lut-convolution-discrete.model");

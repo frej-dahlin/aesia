@@ -238,8 +238,8 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
         pub const dim_in = dim_in_;
         pub const dim_out = dim_out_;
         pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
-        pub const BitSet = StaticBitSet(node_count);
         pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
+        pub const BitSet = StaticBitSet(node_count);
         const node_count = dim_out;
         const ParentIndex = std.math.IntFittingRange(0, dim_in - 1);
         // There are 16 possible logic gates, each one is assigned a probability logit.
@@ -394,6 +394,78 @@ pub fn PackedLogic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type 
 
     };
 }
+
+
+pub fn LogicSequential(gate_count: usize, options: LogicOptions) type {
+    return struct {
+        const Self = @This();
+
+        pub const parameter_count = gate_count * 4;
+        pub const parameter_alignment = 64;
+
+        pub const ItemIn = bool;
+        pub const ItemOut = bool;
+        pub const dim_in = gate_count * 2;
+        pub const dim_out = gate_count;        
+
+
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
+        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
+        pub const BitSet = StaticBitSet(gate_count);
+
+        luts: [gate_count]f32x4,
+        input_buffer: [gate_count][2]f32,
+
+        beta0: if (options.gateRepresentation == .bitset) BitSet else [gate_count]bool,
+        beta1: if (options.gateRepresentation == .bitset) BitSet else [gate_count]bool,
+        beta2: if (options.gateRepresentation == .bitset) BitSet else [gate_count]bool,
+        beta3: if (options.gateRepresentation == .bitset) BitSet else [gate_count]bool,
+
+        pub fn eval(
+            self: *const Self,
+            input: *const [gate_count][2]bool,
+            output: *[gate_count]bool,
+        ) void {
+            for (0..gate_count) |i| {
+                const a, const b = input[i];
+                const beta0 = self.beta0[i];
+                const beta1 = self.beta1[i];
+                const beta2 = self.beta2[i];
+                const beta3 = self.beta3[i];
+
+                output[i] = (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3);
+            }
+        }
+
+        pub fn init(_: *Self, parameters: *[gate_count][4]bool) void {
+            parameters.* = @splat(.{ 1, 1, 0, 0 });
+        }
+
+        fn logistic(x: f32x4) f32x4 {
+            @setFloatMode(.optimized);
+            return @as(f32x4, @splat(1)) / (@as(f32x4, @splat(1)) + @exp(-x));
+        }
+
+        pub fn compile(self: *Self, parameters: *const [gate_count]f32x4) void {
+            for (0..gate_count) |j| {
+                const sigma : f32x4 = logistic(parameters[j]);
+
+                if (options.gateRepresentation == .bitset) {
+                    self.beta0.setValue(j, @round(sigma[0]) != 0);
+                    self.beta1.setValue(j, @round(sigma[1]) != 0);
+                    self.beta2.setValue(j, @round(sigma[2]) != 0);
+                    self.beta3.setValue(j, @round(sigma[3]) != 0);
+                } else {
+                    self.beta0[j] = @round(sigma[0]) != 0;
+                    self.beta1[j] = @round(sigma[1]) != 0;
+                    self.beta2[j] = @round(sigma[2]) != 0;
+                    self.beta3[j] = @round(sigma[3]) != 0;
+                }
+            }
+        }
+    };
+}
+
 /// Divides the input into dim_out #buckets, each output is the sequential sum of
 /// dim_in / dim_out items of the input.
 pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
