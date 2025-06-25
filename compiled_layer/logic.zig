@@ -426,32 +426,56 @@ pub fn LogicSequential(gate_count: usize, options: Options) type {
         beta2: if (options.gateRepresentation == .bitset) BitSet else [gate_count]bool,
         beta3: if (options.gateRepresentation == .bitset) BitSet else [gate_count]bool,
 
+        fn extracteven(a : usize) usize{
+            var x = a & 0x5555555555555555;
+            x = (x | (x >> 1)) & 0x3333333333333333;
+            x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F;
+            x = (x | (x >> 4)) & 0x00FF00FF00FF00FF;
+            x = (x | (x >> 8)) & 0x0000FFFF0000FFFF;
+            x = (x | (x >> 16)) & 0x00000000FFFFFFFF;
+            return x;
+        }
+        fn extractodd(a : usize) usize{
+            var x = (a >> 1) & 0x5555555555555555;
+            x = (x | (x >> 1)) & 0x3333333333333333;
+            x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F;
+            x = (x | (x >> 4)) & 0x00FF00FF00FF00FF;
+            x = (x | (x >> 8)) & 0x0000FFFF0000FFFF;
+            x = (x | (x >> 16)) & 0x00000000FFFFFFFF;
+            return x;
+        }
+
         pub fn eval(
             self: *const Self,
             input: *const Input,
             output: *Output,
         ) void {
             if (options.gateRepresentation == .bitset) {
-                // for (0..output.masks.len) |i| {
-                //     const a : usize = input.masks[i];
-                //     const b : usize  = 0;//input.masks[gate_count+i];
-                //     const beta0 = self.beta0.masks[i];
-                //     const beta1 = self.beta1.masks[i];
-                //     const beta2 = self.beta2.masks[i];
-                //     const beta3 = self.beta3.masks[i];
+                //Because of how the data is formatted, we must do some bit manipulation. Consider changing how the repeat layer works so that the data is sorted in a better way.
+                for (0..output.masks.len) |i| {
+                    const a1 : usize = extracteven(input.masks[2*i]);
+                    const a2 : usize = extracteven(input.masks[2*i+1]);
+                    const a = (a2 << 32) | a1;
+                    const b1 : usize = extractodd(input.masks[2*i]);
+                    const b2 : usize = extractodd(input.masks[2*i+1]);
+                    const b = (b2 << 32) | b1;
+                    const beta0 = self.beta0.masks[i];
+                    const beta1 = self.beta1.masks[i];
+                    const beta2 = self.beta2.masks[i];
+                    const beta3 = self.beta3.masks[i];
                     
-                //     output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
-                // }
-                for (0..gate_count) |i| {
-                    const a = input.isSet(2*i);
-                    const b = input.isSet(2*i+1);
-                    const beta0 = self.beta0.isSet(i);
-                    const beta1 = self.beta1.isSet(i);
-                    const beta2 = self.beta2.isSet(i);
-                    const beta3 = self.beta3.isSet(i);
-
-                    output.setValue(i,  (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3));
+                    output.masks[i] = (a & b & beta0) | (a & ~b & beta1) | (~a & b & beta2) | (~a & ~b & beta3);
                 }
+                // for (0..gate_count) |i| {
+                //     const a = input.isSet(2*i);
+                //     const b = input.isSet(2*i+1);
+                //     const beta0 = self.beta0.isSet(i);
+                //     const beta1 = self.beta1.isSet(i);
+                //     const beta2 = self.beta2.isSet(i);
+                //     const beta3 = self.beta3.isSet(i);
+
+                //     output.setValue(i,  (a and b and beta0) or (a and !b and beta1) or (!a and b and beta2) or (!a and !b and beta3));
+                // }
             } else {
                 for (0..gate_count) |i| {
                     const a = input[i][0];
