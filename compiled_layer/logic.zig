@@ -542,47 +542,102 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
 
         field: usize = 1,
 
-        const mask_from_indices = blk: {
-            var from_indices: [dim_out]usize = undefined;
-            for (&from_indices, 0..) |*from_index, k| {
-                const from = k * quot;
-                const from_mask_index = Input.maskIndex(from);
-                from_index.* = from_mask_index;
+        const mask_first_indices = blk: {
+            var first_indices: [dim_out]usize = undefined;
+            for (&first_indices, 0..) |*first_index, k| {
+                const first = k * quot;
+                const first_mask_index = Input.maskIndex(first);
+                first_index.* = first_mask_index;
             }
-            break :blk from_indices;
+            break :blk first_indices;
         };
 
-        const mask_to_indices = blk: {
-            var to_indices: [dim_out]usize = undefined;
-            for (&to_indices, 0..) |*to_index, k| {
-                const from = k * quot;
-                const to = from + quot;
-                const to_mask_index = Input.maskIndex(to);
-                to_index.* = to_mask_index;
+        const mask_last_indices = blk: {
+            var last_indices: [dim_out]usize = undefined;
+            for (&last_indices, 0..) |*last_index, k| {
+                const first = k * quot;
+                const last = first + quot - 1;
+                const last_mask_index = Input.maskIndex(last);
+                last_index.* = last_mask_index;
             }
-            break :blk to_indices;
+            break :blk last_indices;
+        };
+        const masks = blk: {
+            var nmasks = 0;
+            for (0..dim_out) |k| {
+                const first = k * quot;
+                const last = first + quot - 1;
+                const first_mask_index = Input.maskIndex(first);
+                const last_mask_index = Input.maskIndex(last);
+                nmasks += last_mask_index-first_mask_index + 1;
+            }
+
+            var mask_array: [nmasks]usize = undefined;
+            var count = 0;
+            for (0..dim_out) |k| {
+                const first = k * quot;
+                const last = first + quot - 1;
+                const first_mask_index = Input.maskIndex(first);
+                const last_mask_index = Input.maskIndex(last);
+                const first_index : u8 = @truncate(first % 64);// % 64;
+                const last_index : u8 = @truncate(last % 64);
+                for (first_mask_index..last_mask_index+1) |i| {
+                    if(i==first_mask_index and i==last_mask_index){
+                        if(first_index == 63){
+                            mask_array[count] = 0x8000000000000000;
+                        }
+                        else if(last_index == 0){
+                            mask_array[count] = 0x0000000000000001;
+                        }
+                        else{
+                            mask_array[count] = ~@as(usize, ((1 << (first_index )) - 1)) & ((1 << (last_index + 1)) - 1);
+                        }
+                    }
+                    else if(i==first_mask_index){
+                        if(first_index == 0){
+                            mask_array[count] = 0xFFFFFFFFFFFFFFFF;
+                        }
+                        else if(first_index == 63){
+                            mask_array[count] = 0x8000000000000000;
+                        }
+                        else{
+                            mask_array[count] = ~@as(usize, ((1 << (first_index)) - 1));
+                        }
+                    }
+                    else if(i==last_mask_index){
+                        if(last_index == 0){
+                            mask_array[count] = 0x0000000000000001;
+                        }
+                        else if(last_index == 63){
+                            mask_array[count] = 0xFFFFFFFFFFFFFFFF;
+                        }
+                        else{
+                            mask_array[count] = @as(usize, ((1 << (last_index + 1)) - 1));
+                        }
+                    }
+                    else{
+                        mask_array[count] = 0xFFFFFFFFFFFFFFFF;
+                    }
+                    count += 1;
+                }
+            }
+            break :blk mask_array;
         };
 
-        //Brian Kernighan's algorithm to count number of bits in number, complexity log(a)
-        fn nbits(a : usize) usize {
-            var count : usize = 0;
-            var b : usize = a;
-            while(a > 0) {
-                b = b & (b - 1);
-                count += 1;
-            }
-
-            return count;
-        }
         pub fn eval(_: *Self, input: *const Input, output: *Output) void {
             @memset(output, 0);
+            var count : usize = 0;
             for (output, 0..) |*coord, k| {
                 const from = k * quot;
                 const to = from + quot;
 
                 if (options.gateRepresentation == .bitset) {
-                    for (from..to) |l| coord.* += if (input.isSet(l)) 1 else 0;
-                    //for (mask_from_indices[k]..mask_to_indices[k]) |l| coord.* += nbits(input.masks[l]); 
+                    //for (from..to) |l| coord.* += if (input.isSet(l)) 1 else 0;
+                    for (mask_first_indices[k]..mask_last_indices[k] + 1) |l| {
+                        coord.* += @popCount(input.masks[l] & masks[count]);
+                        count += 1;
+                    }
+                    
                 } else {
                     for (from..to) |l| coord.* += if (input[l]) 1 else 0;
                 }
