@@ -1,3 +1,4 @@
+const std = @import("std");
 const aesia = @import("../aesia.zig");
 
 const StaticBitSet = @import("bitset.zig").StaticBitSet;
@@ -102,6 +103,26 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
         steer_c: StaticBitSet(dim_out / 2),
         steer_d: StaticBitSet(dim_out / 2),
 
+        const c_mask = blk: {
+            var mask: usize = 0;
+            if(delta >= 64){
+                break :blk mask;
+            }
+            else{
+                var value : bool = true;
+                for (0.. (64 / delta)) |k| {
+                    if(value)
+                    {
+                        for(0..delta) |j| {
+                            mask |=  (1 << ((k * delta + j)));
+                        }
+                    }
+                    value = !value;
+                }
+                break :blk mask;
+            }
+        };
+
         pub fn init(_: *Self, parameters: *[parameter_count]bool) void {
             @memset(parameters, -10);
         }
@@ -120,6 +141,20 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                 for (0..parameter_count / 2) |j| {
                     self.steer_c.setValue(j, @round(1 / (1 + @exp(-parameters[2*j]))) != 0);
                     self.steer_d.setValue(j, @round(1 / (1 + @exp(-parameters[2*j+1]))) != 0);
+                }
+                if(delta < 64) {
+                    var steer_index: usize = 0;
+                    for (0..dim >> (stage + 1)) |k| {
+                        const from = 2 * k * delta;
+                        const to = (2 * k + 1) * delta;
+                        for (from..to) |j| {
+                            //self.steer_c.setValue(j, @round(1 / (1 + @exp(-parameters[2*steer_index]))) != 0);
+                            //self.steer_d.setValue(j, @round(1 / (1 + @exp(-parameters[2*steer_index+1]))) != 0);
+                            self.steer.setValue(j, @round(1 / (1 + @exp(-parameters[2*steer_index]))) != 0);
+                            self.steer.setValue(j+delta, @round(1 / (1 + @exp(-parameters[2*steer_index+1]))) != 0);
+                            steer_index += 1;
+                        }
+                    }
                 }
             }
         }
@@ -145,22 +180,31 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                     }
                 }
                 else {
-                    var steer_index: usize = 0;
-                    for (0..dim >> (stage + 1)) |k| {
-                        const from = 2 * k * delta;
-                        const to = (2 * k + 1) * delta;
-                        for (from..to) |j| {
-                            const a = input.isSet(j);
-                            const b = input.isSet(j + delta);
-                            const c = self.steer.isSet(steer_index);
-                            steer_index += 1;
-                            const d = self.steer.isSet(steer_index);
-                            steer_index += 1;
-
-                            output.setValue(j, (!c and a) or (c and b));
-                            output.setValue(j + delta,  (d and a) or (!d and b));
-                        }
+                    for(0..output.masks.len) |l|
+                    {
+                        const a = input.masks[l];
+                        const b = input.masks[l] >> delta;
+                        const c = self.steer.masks[l];
+                        const d = self.steer.masks[l] >> delta;
+                        output.masks[l] = ((~c & a) | (c & b)) & c_mask;
+                        output.masks[l] |= (((d & a) | (~d & b)) << delta) & ~c_mask;
                     }
+                    // var steer_index: usize = 0;
+                    // for (0..dim >> (stage + 1)) |k| {
+                    //     const from = 2 * k * delta;
+                    //     const to = (2 * k + 1) * delta;
+                    //     for (from..to) |j| {
+                    //         const a = input.isSet(j);
+                    //         const b = input.isSet(j + delta);
+                    //         const c = self.steer.isSet(steer_index);
+                    //         steer_index += 1;
+                    //         const d = self.steer.isSet(steer_index);
+                    //         steer_index += 1;
+
+                    //         output.setValue(j, (!c and a) or (c and b));
+                    //         output.setValue(j + delta,  (d and a) or (!d and b));
+                    //     }
+                    // }
                 }
             } else {
                 var steer_index: usize = 0;
