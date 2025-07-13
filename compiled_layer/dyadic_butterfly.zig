@@ -122,6 +122,25 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                 break :blk mask;
             }
         };
+        const d_mask = blk: {
+            var mask: usize = 0;
+            if(delta >= 64){
+                break :blk mask;
+            }
+            else{
+                var value : bool = false;
+                for (0.. (64 / delta)) |k| {
+                    if(value)
+                    {
+                        for(0..delta) |j| {
+                            mask |=  (1 << ((k * delta + j)));
+                        }
+                    }
+                    value = !value;
+                }
+                break :blk mask;
+            }
+        };
 
         pub fn init(_: *Self, parameters: *[parameter_count]bool) void {
             @memset(parameters, -10);
@@ -155,24 +174,44 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                             steer_index += 1;
                         }
                     }
+
+                    for(0..self.steer.masks.len) |l|
+                    {
+                        self.steer.masks[l] = (self.steer.masks[l] & c_mask) | (~self.steer.masks[l] & ~c_mask);
+                    }
+                }
+                else{
+                    const mask_delta = delta / 64;
+                    var steer_index: usize = 0;
+                    for (0..dim >> (stage + 1)) |k| {
+                        const from = 2 * k * mask_delta;
+                        const to = (2 * k + 1) * mask_delta;
+                        for (from..to) |j| {
+                            for (0..64) |l| {
+                                self.steer.setValue(64*j+l, @round(1 / (1 + @exp(-parameters[2*steer_index]))) != 0);
+                                self.steer.setValue(64*j+l+delta, @round(1 / (1 + @exp(-parameters[2*steer_index+1]))) != 0);
+                                steer_index += 1;
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        pub fn eval(self: *const Self, input: *const Input, output: *Output) void {
+        pub fn eval(self: *const Self, noalias input: *const Input, noalias output: *Output) void {
             if (options.gateRepresentation == .bitset) {
                 if(delta >= 64) {
                     const mask_delta = delta / 64;
-                    var steer_mask_index: usize = 0;
                     for (0..dim >> (stage + 1)) |k| {
                         const from = 2 * k * mask_delta;
                         const to = (2 * k + 1) * mask_delta;
                         for (from..to) |j| {
                             const a = input.masks[j];
                             const b = input.masks[j+mask_delta];
-                            const c = self.steer_c.masks[steer_mask_index];
-                            const d = self.steer_d.masks[steer_mask_index];
-                            steer_mask_index += 1;
+                            // const c = self.steer_c.masks[steer_mask_index];
+                            // const d = self.steer_d.masks[steer_mask_index];
+                            const c = self.steer.masks[j];
+                            const d = self.steer.masks[j+mask_delta];
 
                             output.masks[j] = (~c & a) | (c & b);
                             output.masks[j+mask_delta] = (d & a) | (~d & b);
@@ -182,29 +221,18 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                 else {
                     for(0..output.masks.len) |l|
                     {
-                        const a = input.masks[l];
-                        const b = input.masks[l] >> delta;
-                        const c = self.steer.masks[l];
-                        const d = self.steer.masks[l] >> delta;
-                        output.masks[l] = ((~c & a) | (c & b)) & c_mask;
-                        output.masks[l] |= (((d & a) | (~d & b)) << delta) & ~c_mask;
-                    }
-                    // var steer_index: usize = 0;
-                    // for (0..dim >> (stage + 1)) |k| {
-                    //     const from = 2 * k * delta;
-                    //     const to = (2 * k + 1) * delta;
-                    //     for (from..to) |j| {
-                    //         const a = input.isSet(j);
-                    //         const b = input.isSet(j + delta);
-                    //         const c = self.steer.isSet(steer_index);
-                    //         steer_index += 1;
-                    //         const d = self.steer.isSet(steer_index);
-                    //         steer_index += 1;
+                        // const a = input.masks[l];
+                        // const b = input.masks[l] >> delta;
+                        // const c = self.steer.masks[l];
+                        // const d = self.steer.masks[l] >> delta;
+                        // output.masks[l] = ((~c & a) | (c & b)) & c_mask;
+                        // output.masks[l] |= (((d & a) | (~d & b)) << delta) & ~c_mask;
 
-                    //         output.setValue(j, (!c and a) or (c and b));
-                    //         output.setValue(j + delta,  (d and a) or (!d and b));
-                    //     }
-                    // }
+                        const a = (input.masks[l] & c_mask) | ((input.masks[l] << delta) & d_mask);
+                        const b = ((input.masks[l] >> delta) & c_mask) | (input.masks[l] & d_mask);
+                        const cd = self.steer.masks[l];
+                        output.masks[l] = ((~cd & a) | (cd & b));
+                    }
                 }
             } else {
                 var steer_index: usize = 0;
