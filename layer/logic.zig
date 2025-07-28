@@ -383,7 +383,7 @@ pub fn PackedLogic(dim_in: usize, dim_out: usize, options: LogicOptions) type {
 
         /// Initializes the layer's parameters and its parent connections.
         pub fn init(self: *Self, parameters: *[parameter_count]f32) void {
-            parameters.* = @bitCast(@as([node_count]f32x4, @splat(.{ 4, 4, 0, 0 })));
+            parameters.* = @bitCast(@as([node_count]f32x4, @splat(.{ 4, 4, -4, -4 })));
             self.* = undefined;
             for (0..node_count) |j| {
                 self.parents[j] = .{
@@ -1224,6 +1224,97 @@ pub fn LUT(dim_in: usize, dim_out: usize, options: LUTOptions) type {
 
         pub fn giveParameters(self: *Self) void {
             _ = self;
+        }
+    };
+}
+
+pub fn ExclusiveOr(dim: usize) type {
+    return struct {
+        const Self = @This();
+
+        const parameter_count = dim;
+        const parameter_alignment = 64;
+
+        pub const info = aesia.layer.Info{
+            .dim_in = dim,
+            .dim_out = dim,
+            .trainable = true,
+            .parameter_count = parameter_count,
+            .parameter_alignment = parameter_alignment,
+            .regularize = true,
+        };
+
+        beta: [dim]f32,
+        input_buffer: [dim]f32,
+
+        pub fn regularizeError(self: *Self) f32 {
+            var result: f32 = 0;
+            for (0..dim) |i| {
+                const x = self.beta[i];
+                result += x * (1 - x);
+            }
+            return result;
+        }
+
+        pub fn regularize(_: *Self, _: *[dim]f32) void {}
+
+        pub fn eval(
+            self: *const Self,
+            input: *const [dim]f32,
+            output: *[dim]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..dim) |i| {
+                output[i] = input[i] * self.beta[i];
+            }
+        }
+
+        pub fn init(_: *Self, parameters: *[dim]f32) void {
+            for (parameters) |*parameter| parameter.* = -4;
+        }
+
+        pub fn takeParameters(self: *Self, parameters: *[dim]f32) void {
+            @setFloatMode(.optimized);
+            for (parameters, &self.beta) |logit, *expit| expit.* = 1 / (1 + @exp(-logit));
+        }
+
+        pub fn giveParameters(_: *Self) void {}
+
+        pub fn forwardPass(
+            self: *Self,
+            input: *const [dim]f32,
+            output: *[dim]f32,
+        ) void {
+            self.input_buffer = input.*;
+            self.eval(input, output);
+        }
+
+        pub fn backwardPass(
+            self: *const Self,
+            activation_delta: *const [dim]f32,
+            cost_gradient: *[dim]f32,
+            argument_delta: *[dim]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..dim) |i| {
+                const x = self.input_buffer[i];
+                const beta = self.beta[i];
+                cost_gradient[i] += activation_delta[i] * x * beta * (1 - beta);
+                argument_delta[i] = activation_delta[i] * beta;
+            }
+        }
+
+        pub fn backwardPassFinal(
+            self: *const Self,
+            activation_delta: *const [dim]f32,
+            cost_gradient: *[dim]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..dim) |i| {
+                const x = self.input_buffer[i];
+                const beta = self.beta[i];
+                cost_gradient[i] += activation_delta[i] * x * beta * (1 - beta);
+            }
         }
     };
 }
