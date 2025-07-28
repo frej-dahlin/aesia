@@ -112,6 +112,46 @@ pub fn Adam(options: AdamOptions) fn (usize) type {
     }.Optimizer;
 }
 
+pub const SGDOptions = struct {
+    learn_rate: f32 = 0.01,
+    momentum: f32 = 0.9,
+
+    pub const default = @This(){};
+};
+
+pub fn SGD(options: SGDOptions) fn (usize) type {
+    return struct {
+        pub fn Optimizer(parameter_count: usize) type {
+            assertParameterCount(parameter_count);
+            const vector_count = parameter_count / vector_len;
+            return struct {
+                const Self = @This();
+
+                const learn_rate = options.learn_rate;
+                const momentum = options.momentum;
+
+                b: [vector_count]Vector,
+
+                pub const default = Self{
+                    .b = @splat(@splat(0)),
+                };
+
+                pub fn step(
+                    self: *Self,
+                    parameters: *[vector_count]Vector,
+                    gradient: *[vector_count]Vector,
+                ) void {
+                    @setFloatMode(.optimized);
+                    for (parameters, gradient, &self.b) |*parameter, partial, *b| {
+                        b.* = @as(Vector, @splat(momentum)) * b.* + partial;
+                        parameter.* -= @as(Vector, @splat(learn_rate)) * b.*;
+                    }
+                }
+            };
+        }
+    }.Optimizer;
+}
+
 pub const AdamWOptions = struct {
     learn_rate: f32 = 0.01,
     weight_decay: f32 = 0.0002,
