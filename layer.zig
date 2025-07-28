@@ -6,6 +6,7 @@ const pad = @import("layer/pad.zig");
 
 pub const GroupSum = @import("layer/group_sum.zig").GroupSum;
 pub const ZeroPad = @import("layer/pad.zig").ZeroPad;
+pub const Pad = @import("layer/pad.zig").Pad;
 pub const Repeat = pad.Repeat;
 
 pub const ButterflySwap = dyadic_butterfly.ButterflySwap;
