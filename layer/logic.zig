@@ -15,6 +15,14 @@ pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
     return struct {
         const Self = @This();
 
+        pub const info = aesia.layer.Info{
+            .dim_in = dim_in_,
+            .dim_out = dim_out_,
+            .trainable = true,
+            .parameter_count = 16 * dim_out_,
+            // For efficient SIMD we ensure that the parameters align to a cacheline.
+            .parameter_alignment = 64,
+        };
         pub const ItemIn = f32;
         pub const ItemOut = f32;
         pub const dim_in = dim_in_;
@@ -166,6 +174,20 @@ pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
             }
         }
 
+        pub fn validationEval(
+            noalias self: *Self,
+            noalias input: *const [dim_in]ItemIn,
+            noalias output: *[dim_out]ItemOut,
+        ) void {
+            @setFloatMode(.optimized);
+            assert(self.sigma != null);
+            for (self.sigma.?, output, self.parents) |sigma, *activation, parents| {
+                const a = input[parents[0]];
+                const b = input[parents[1]];
+                activation.* = @reduce(.Add, @round(sigma) * gate.vector(a, b));
+            }
+        }
+
         /// Evaluates the layer and caches relevant data to compute the gradient with
         /// respect to the underlying logits. Asserts that the layer has been given parameters
         /// via takeParameters.
@@ -226,6 +248,17 @@ pub fn Logic(dim_in_: usize, dim_out_: usize, options: LogicOptions) type {
                 cost_gradient[j] += self.gradient[j] * @as(f32x16, @splat(input[j]));
                 output[self.parents[j][0]] += self.diff[j][0] * input[j];
                 output[self.parents[j][1]] += self.diff[j][1] * input[j];
+            }
+        }
+
+        pub fn backwardPassFinal(
+            noalias self: *Self,
+            noalias input: *const [dim_out]f32,
+            noalias cost_gradient: *[node_count]f32x16,
+        ) void {
+            @setFloatMode(.optimized);
+            for (0..node_count) |j| {
+                cost_gradient[j] += self.gradient[j] * @as(f32x16, @splat(input[j]));
             }
         }
 
