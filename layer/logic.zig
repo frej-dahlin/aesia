@@ -472,9 +472,7 @@ pub fn PackedLogic(dim_in: usize, dim_out: usize, options: LogicOptions) type {
             for (0..node_count) |j| self.beta[j] = logistic(parameters[j]);
         }
 
-        pub fn giveParameters(self: *Self) void {
-            _ = self;
-        }
+        pub fn giveParameters(_: *Self) void {}
     };
 }
 
@@ -503,8 +501,9 @@ pub fn LogicSequential(gate_count: usize) type {
             output: *[gate_count]f32,
         ) void {
             @setFloatMode(.optimized);
-            for (self.luts, input, output) |lut, bits, *activation| {
-                const a, const b = bits;
+            for (self.luts, output, 0..) |lut, *activation, i| {
+                const a = input[i][0];
+                const b = input[i][1];
                 activation.* = @reduce(.Add, lut * f32x4{
                     a * b,
                     a * (1 - b),
@@ -514,14 +513,39 @@ pub fn LogicSequential(gate_count: usize) type {
             }
         }
 
+        pub fn validationEval(
+            self: *const Self,
+            input: *const [gate_count][2]f32,
+            output: *[gate_count]f32,
+        ) void {
+            @setFloatMode(.optimized);
+            for (self.luts, output, 0..) |lut, *activation, i| {
+                const a = input[i][0];
+                const b = input[i][1];
+                activation.* = @reduce(.Add, @round(lut) * f32x4{
+                    a * b,
+                    a * (1 - b),
+                    (1 - a) * b,
+                    (1 - a) * (1 - b),
+                });
+            }
+        }
+
         pub fn init(_: *Self, parameters: *[gate_count]f32x4) void {
-            parameters.* = @splat(.{ 1, 1, 0, 0 });
+            for (0..gate_count) |i| {
+                parameters[i] = .{
+                    4,
+                    4,
+                    -4,
+                    -4,
+                };
+            }
         }
 
         pub fn takeParameters(self: *Self, parameters: *[gate_count]f32x4) void {
             @setFloatMode(.optimized);
-            for (parameters, &self.luts) |logit, *expit| expit.* =
-                @as(f32x4, @splat(1)) / (@as(f32x4, @splat(1)) + @exp(-logit));
+            for (parameters, &self.luts) |logit, *expit|
+                expit.* = @as(f32x4, @splat(1)) / (@as(f32x4, @splat(1)) + @exp(-logit));
         }
 
         pub fn giveParameters(_: *Self) void {}
@@ -531,7 +555,7 @@ pub fn LogicSequential(gate_count: usize) type {
             input: *const [gate_count][2]f32,
             output: *[gate_count]f32,
         ) void {
-            @memcpy(&self.input_buffer, input);
+            self.input_buffer = input.*;
             self.eval(input, output);
         }
 
@@ -544,7 +568,8 @@ pub fn LogicSequential(gate_count: usize) type {
             @setFloatMode(.optimized);
             argument_delta.* = @splat(@splat(0));
             for (0..gate_count) |i| {
-                const a, const b = self.input_buffer[i];
+                const a = self.input_buffer[i][0];
+                const b = self.input_buffer[i][1];
                 const lut = self.luts[i];
                 cost_gradient[i] += @as(f32x4, @splat(activation_delta[i])) *
                     lut * (@as(f32x4, @splat(1)) - lut) * f32x4{
@@ -571,15 +596,16 @@ pub fn LogicSequential(gate_count: usize) type {
         ) void {
             @setFloatMode(.optimized);
             for (0..gate_count) |i| {
-                const a, const b = self.input_buffer[i];
+                const a = self.input_buffer[i][0];
+                const b = self.input_buffer[i][1];
                 const lut = self.luts[i];
-                cost_gradient[i] += @as(f32x4, @splat(activation_delta[i])) * lut * (1 - lut) *
-                    f32x4{
-                        a * b,
-                        a * (1 - b),
-                        (1 - a) * b,
-                        (1 - a) * (1 - b),
-                    };
+                cost_gradient[i] += @as(f32x4, @splat(activation_delta[i])) *
+                    lut * (@as(f32x4, @splat(1)) - lut) * f32x4{
+                    a * b,
+                    a * (1 - b),
+                    (1 - a) * b,
+                    (1 - a) * (1 - b),
+                };
             }
         }
     };

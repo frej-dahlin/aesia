@@ -255,8 +255,8 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
                     const delta_left = activation_delta[index_left];
                     const delta_right = activation_delta[index_right];
 
-                    cost_gradient[index_left] += delta_left * (b - a) * c * (1 - c);
-                    cost_gradient[index_right] += delta_right * (b - a) * d * (1 - d);
+                    cost_gradient[index_left] += delta_left * (a - b) * c * (1 - c);
+                    cost_gradient[index_right] += delta_right * (a - b) * d * (1 - d);
 
                     argument_delta[index_left] += delta_left * (1 - c) + delta_right * (1 - d);
                     argument_delta[index_right] += delta_left * c + delta_right * d;
@@ -283,8 +283,8 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
                     const delta_left = activation_delta[index_left];
                     const delta_right = activation_delta[index_right];
 
-                    cost_gradient[index_left] += delta_left * (b - a) * c * (1 - c);
-                    cost_gradient[index_right] += delta_right * (b - a) * d * (1 - d);
+                    cost_gradient[index_left] += delta_left * (a - b) * c * (1 - c);
+                    cost_gradient[index_right] += delta_right * (a - b) * d * (1 - d);
                 }
             }
         }

@@ -32,7 +32,7 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     const scale = 1.0 / 255.0;
     for (images) |*image| {
         for (image) |*pixel| {
-            pixel.* = @as(f32, @floatFromInt(try reader.readByte())) * scale;
+            pixel.* = if (@as(f32, @floatFromInt(try reader.readByte())) * scale > 0.5) 1 else 0;
         }
     }
     return images;
@@ -58,124 +58,72 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const ConvolutionLogic = aesia.layer.ConvolutionLogic;
-const LogicLayer = aesia.layer.PackedLogic;
-const GroupSum = aesia.layer.GroupSum;
-const LUTConvolution = aesia.layer.LUTConvolution;
-const ButterflyMap = aesia.layer.ButterflyMap;
-const ZeroPad = aesia.layer.ZeroPad;
+const layer = aesia.layer;
 
-var pcg = std.Random.Pcg.init(0);
-var rand = pcg.random();
-const width = 32_000;
-const model_scale = 4;
 const Model = aesia.Model(&.{
-    //     LUTConvolution(.{
-    //         .depth = 1,
-    //         .height = 28,
-    //         .width = 28,
-    //         .lut_count = model_scale,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 2, .col = 2 },
-    //     }),
-    //     LUTConvolution(.{
-    //         .depth = model_scale,
-    //         .height = 14,
-    //         .width = 14,
-    //         .lut_count = 2,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 2, .col = 2 },
-    //     }),
-    //     LUTConvolution(.{
-    //         .depth = 2 * model_scale,
-    //         .height = 7,
-    //         .width = 7,
-    //         .lut_count = 2,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 1, .col = 1 },
-    //     }),
-    //     LUTConvolution(.{
-    //         .depth = 4 * model_scale,
-    //         .height = 6,
-    //         .width = 6,
-    //         .lut_count = 2,
-    //         .field_size = .{ .height = 2, .width = 2 },
-    //         .stride = .{ .row = 2, .col = 2 },
-    //     }),
-    //     aesia.layer.Repeat(8 * model_scale * 3 * 3, 8192),
-    // } ++ aesia.layer.BenesMap(13) ++
-    //     .{
-    //         aesia.layer.LogicSequential(4096),
-    //     } ++ aesia.layer.BenesMap(12) ++
-    //     .{
-    //         aesia.layer.LogicSequential(2048),
-    //     } ++ aesia.layer.BenesMap(11) ++
-    //     .{
-    //         aesia.layer.LogicSequential(1024),
-    //         GroupSum(1024, 10),
-    //     }, .{
-    aesia.layer.Repeat(784, 8192),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 0),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.LogicSequential(4096),
-    aesia.layer.Repeat(4096, 8192),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 0),
-    aesia.layer.LogicSequential(4096),
-    aesia.layer.Repeat(4096, 8192),
-    aesia.layer.ButterflyMap(13, 0),
-    aesia.layer.ButterflyMap(13, 1),
-    aesia.layer.ButterflyMap(13, 2),
-    aesia.layer.ButterflyMap(13, 3),
-    aesia.layer.ButterflyMap(13, 4),
-    aesia.layer.ButterflyMap(13, 5),
-    aesia.layer.ButterflyMap(13, 6),
-    aesia.layer.ButterflyMap(13, 7),
-    aesia.layer.ButterflyMap(13, 8),
-    aesia.layer.ButterflyMap(13, 9),
-    aesia.layer.ButterflyMap(13, 10),
-    aesia.layer.ButterflyMap(13, 11),
-    aesia.layer.ButterflyMap(13, 12),
-    aesia.layer.LogicSequential(4096),
-    GroupSum(4096, 10),
+    layer.Repeat(784, 8192),
+    layer.ButterflyMap(13, 12),
+    layer.ButterflyMap(13, 11),
+    layer.ButterflyMap(13, 10),
+    layer.ButterflyMap(13, 9),
+    layer.ButterflyMap(13, 8),
+    layer.ButterflyMap(13, 7),
+    layer.ButterflyMap(13, 6),
+    layer.ButterflyMap(13, 5),
+    layer.ButterflyMap(13, 4),
+    layer.ButterflyMap(13, 3),
+    layer.ButterflyMap(13, 2),
+    layer.ButterflyMap(13, 1),
+    layer.ButterflyMap(13, 0),
+    layer.ButterflyMap(13, 1),
+    layer.ButterflyMap(13, 2),
+    layer.ButterflyMap(13, 3),
+    layer.ButterflyMap(13, 4),
+    layer.ButterflyMap(13, 5),
+    layer.ButterflyMap(13, 6),
+    layer.ButterflyMap(13, 7),
+    layer.ButterflyMap(13, 8),
+    layer.ButterflyMap(13, 9),
+    layer.ButterflyMap(13, 10),
+    layer.ButterflyMap(13, 11),
+    layer.ButterflyMap(13, 12),
+    layer.LogicSequential(4096),
+    layer.Repeat(4096, 8192),
+    layer.ButterflyMap(13, 12),
+    layer.ButterflyMap(13, 11),
+    layer.ButterflyMap(13, 10),
+    layer.ButterflyMap(13, 9),
+    layer.ButterflyMap(13, 8),
+    layer.ButterflyMap(13, 7),
+    layer.ButterflyMap(13, 6),
+    layer.ButterflyMap(13, 5),
+    layer.ButterflyMap(13, 4),
+    layer.ButterflyMap(13, 3),
+    layer.ButterflyMap(13, 2),
+    layer.ButterflyMap(13, 1),
+    layer.ButterflyMap(13, 0),
+    layer.LogicSequential(4096),
+    layer.Repeat(4096, 8192),
+    layer.ButterflyMap(13, 0),
+    layer.ButterflyMap(13, 1),
+    layer.ButterflyMap(13, 2),
+    layer.ButterflyMap(13, 3),
+    layer.ButterflyMap(13, 4),
+    layer.ButterflyMap(13, 5),
+    layer.ButterflyMap(13, 6),
+    layer.ButterflyMap(13, 7),
+    layer.ButterflyMap(13, 8),
+    layer.ButterflyMap(13, 9),
+    layer.ButterflyMap(13, 10),
+    layer.ButterflyMap(13, 11),
+    layer.ButterflyMap(13, 12),
+    layer.LogicSequential(4096),
+    layer.GroupSum(1 << 12, 10, 10.0),
 }, .{
     .Loss = aesia.loss.DiscreteCrossEntropy(u8, 10),
+    .ValidationLoss = aesia.loss.MissClassificationCount(u8, 10),
     .Optimizer = aesia.optimizer.Adam(.{
-        .learn_rate = 0.05,
+        .learn_rate = 0.01,
     }),
 });
 var model: Model = undefined;
@@ -190,11 +138,11 @@ pub fn main() !void {
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
 
     // Load prior model.
-    std.debug.print("Loading latest mnist.model...", .{});
-    try model.readFromFile("mnist.model");
-    model.lock();
-    std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
-    model.unlock();
+    // std.debug.print("Loading latest mnist.model...", .{});
+    // try model.readFromFile("mnist.model");
+    // model.lock();
+    // std.debug.print("successfully loaded model with validiation cost: {d}\n", .{model.cost(.init(images_validate, labels_validate))});
+    // model.unlock();
 
     const training_count = 60_000;
     const validate_count = 10_000;
@@ -218,8 +166,8 @@ pub fn main() !void {
     );
 
     var timer = try std.time.Timer.start();
-    const epoch_count = 30;
-    const batch_size = 128;
+    const epoch_count = 100;
+    const batch_size = 16;
     model.train(
         .init(images_training[0..training_count], labels_training[0..training_count]),
         .init(images_validate[0..validate_count], labels_validate[0..validate_count]),
