@@ -11,6 +11,10 @@ pub const Repeat = pad.Repeat;
 pub const ButterflySwap = dyadic_butterfly.ButterflySwap;
 pub const ButterflyMap = dyadic_butterfly.ButterflyMap;
 pub const BenesMap = dyadic_butterfly.BenesMap;
+pub const TruncatedBenesSwap = dyadic_butterfly.TruncatedBenesSwap;
+pub const TruncatedBenesMap = dyadic_butterfly.TruncatedBenesMap;
+pub const TruncatedBenesGate = dyadic_butterfly.TruncatedBenesGate;
+pub const ButterflyGate = dyadic_butterfly.ButterflyGate;
 
 pub const Logic = logic.Logic;
 pub const PackedLogic = logic.PackedLogic;
