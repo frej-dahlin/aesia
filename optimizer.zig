@@ -75,9 +75,9 @@ pub fn Adam(options: AdamOptions) fn (usize) type {
             return struct {
                 const Self = @This();
 
-                const learn_rate = options.learn_rate;
-                const beta = options.beta;
-                const epsilon = options.epsilon;
+                learn_rate: f32 = options.learn_rate,
+                beta: [2]f32 = options.beta,
+                epsilon: f32 = options.epsilon,
 
                 m: [vector_count]Vector,
                 v: [vector_count]Vector,
@@ -92,6 +92,9 @@ pub fn Adam(options: AdamOptions) fn (usize) type {
                     parameters: *[vector_count]Vector,
                     gradient: *[vector_count]Vector,
                 ) void {
+                    const learn_rate = self.learn_rate;
+                    const beta = self.beta;
+                    const epsilon = self.epsilon;
                     @setFloatMode(.optimized);
                     for (parameters, gradient, &self.m, &self.v) |*parameter, partial, *m, *v| {
                         m.* = @as(Vector, @splat(beta[0])) * m.* +
@@ -130,10 +133,10 @@ pub fn AdamW(options: AdamWOptions) fn (usize) type {
             return struct {
                 const Self = @This();
 
-                const learn_rate = options.learn_rate;
-                const weight_decay = options.weight_decay;
-                const beta = options.beta;
-                const epsilon = options.epsilon;
+                learn_rate: f32 = options.learn_rate,
+                weight_decay: f32 = options.weight_decay,
+                beta: f32 = options.beta,
+                epsilon: f32 = options.epsilon,
 
                 m: [vector_count]Vector,
                 v: [vector_count]Vector,
@@ -148,9 +151,13 @@ pub fn AdamW(options: AdamWOptions) fn (usize) type {
                     parameters: *[vector_count]Vector,
                     gradient: *[vector_count]Vector,
                 ) void {
+                    const learn_rate = self.learn_rate;
+                    const weight_decay = self.weiht_decay;
+                    const beta = self.beta;
+                    const epsilon = self.epsilon;
                     @setFloatMode(.optimized);
                     for (parameters, gradient, &self.m, &self.v) |*parameter, partial, *m, *v| {
-                        parameter.* -= @as(Vector, @splat(learn_rate * weight_decay)) * parameter.*;
+                        parameter.* += @as(Vector, @splat(learn_rate * weight_decay)) * parameter.*;
                         m.* = @as(Vector, @splat(beta[0])) * m.* +
                             @as(Vector, @splat(1 - beta[0])) * partial;
                         v.* = @as(Vector, @splat(beta[1])) * v.* +
