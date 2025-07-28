@@ -113,6 +113,9 @@ pub fn Network(Layers: []const type) type {
             .{ @typeName(prev), @typeName(next) },
         );
     }
+    // If every layer is flagged as in-place, then the network does *not* need a double-buffer
+    // to pass input/output.
+    const in_place = for (Layers) |Layer| if (!Layer.info.in_place) break false else true;
 
     return struct {
         const Self = @This();
@@ -157,6 +160,12 @@ pub fn Network(Layers: []const type) type {
             break :blk len;
         };
 
+        // Index of the first trainable layer, used to call backwardPassFinal instead
+        // of backwardPass, for efficiency.
+        const first_trainable_index = for (Layers, 0..) |Layer, i| {
+            if (Layer.info.trainable) break i;
+        } else std.math.maxInt(usize);
+
         pub const LayerLast = Layers[Layers.len - 1];
         pub const LayerFirst = Layers[0];
         pub const dim_in = LayerFirst.info.dim_in;
@@ -176,6 +185,7 @@ pub fn Network(Layers: []const type) type {
             var max: usize = 0;
             // Fixme: @sizeOf(LayerInput(Layer)) is only required because we do not have a
             // backwardPassFinal function.
+            // Fixme: Ensure we can modify this now.
             for (Layers) |Layer| max = @max(max, @max(
                 @sizeOf(Layer.info.Input()),
                 @sizeOf(Layer.info.Output()),
@@ -187,9 +197,10 @@ pub fn Network(Layers: []const type) type {
         /// A network is evaluated layer by layer, either forwards or backwards.
         /// In either case one only needs to store the result of the previous
         /// layer's computation and pass it to the next. A double buffer facilitates this.
-        buffer: DoubleBuffer(buffer_size, buffer_alignment),
+        buffer: if (in_place) void else DoubleBuffer(buffer_size, buffer_alignment),
 
         pub fn writeToFile(parameters: *[parameter_count]f32, path: []const u8) !void {
+            @setEvalBranchQuota(1000 * Layers.len);
             const file = try std.fs.cwd().createFile(path, .{});
             defer file.close();
 
@@ -204,6 +215,7 @@ pub fn Network(Layers: []const type) type {
         }
 
         pub fn readFromFile(parameters: *[parameter_count]f32, path: []const u8) !void {
+            @setEvalBranchQuota(1000 * Layers.len);
             const file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
 
@@ -230,6 +242,30 @@ pub fn Network(Layers: []const type) type {
                     layer.eval(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 } else {
                     Layer.eval(@ptrCast(input_buffer), @ptrCast(output_buffer));
+                }
+                if (!Layer.info.in_place) buffer.flip();
+            }
+            return buffer.front(Output);
+        }
+
+        /// Evaluates the network using the validationEval functions, layer by layer.
+        pub fn validationEval(self: *Self, input: *const Input) *const Output {
+            @setEvalBranchQuota(1000 * Layers.len);
+            const buffer = &self.buffer;
+            inline for (Layers, &self.layers, 0..) |Layer, *layer, l| {
+                const input_buffer = if (l == 0) input else buffer.front(Layer.info.Input());
+                const output_buffer: *Layer.info.Output() = if (Layer.info.in_place)
+                    @constCast(buffer.front(Layer.info.Output()))
+                else
+                    buffer.back(Layer.info.Output());
+                const evalFunction = if (std.meta.hasFn(Layer, "validationEval"))
+                    Layer.validationEval
+                else
+                    Layer.eval;
+                if (Layer.info.statefull) {
+                    evalFunction(layer, @ptrCast(input_buffer), @ptrCast(output_buffer));
+                } else {
+                    evalFunction(@ptrCast(input_buffer), @ptrCast(output_buffer));
                 }
                 if (!Layer.info.in_place) buffer.flip();
             }
@@ -303,10 +339,11 @@ pub fn Network(Layers: []const type) type {
         /// network's buffer with the delta for the last layer. A pointer to the
         /// correct memory region is given by lastDeltaBuffer().
         pub fn backwardPass(self: *Self, gradient: *[parameter_count]f32) void {
+            // Fixme: throw compile error if first_trainable_index is intMax(usize).
             const buffer = &self.buffer;
             buffer.flip();
             comptime var l: usize = Layers.len;
-            inline while (l > 0) {
+            inline while (l > first_trainable_index) {
                 l -= 1;
                 const Layer = Layers[l];
                 const layer = &self.layers[l];
@@ -316,20 +353,22 @@ pub fn Network(Layers: []const type) type {
                 else
                     buffer.back([Layer.info.dim_in]f32);
                 const range = parameter_ranges[l];
-                if (!Layer.info.statefull and l > 0) {
+                // Todo: Simplify branches, for example, the second clause in the conjunction
+                // is not needed here since we changed the loop condition.
+                if (!Layer.info.statefull and l > first_trainable_index) {
                     Layer.backwardPass(@ptrCast(input), @ptrCast(output));
-                } else if (!Layer.info.trainable and l > 0) {
+                } else if (!Layer.info.trainable and l > first_trainable_index) {
                     layer.backwardPass(@ptrCast(input), @ptrCast(output));
                 } else if (Layer.info.trainable) {
                     const gradient_slice = gradient[range.from..range.to()];
-                    if (l == 0) {
+                    if (l == first_trainable_index) {
                         layer.backwardPassFinal(
-                            @ptrCast(input),
+                            @alignCast(@ptrCast(input)),
                             @alignCast(@ptrCast(gradient_slice)),
                         );
                     } else {
                         layer.backwardPass(
-                            @ptrCast(input),
+                            @alignCast(@ptrCast(input)),
                             @alignCast(@ptrCast(gradient_slice)),
                             @ptrCast(output),
                         );

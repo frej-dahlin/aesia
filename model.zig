@@ -6,10 +6,12 @@ pub const aesia = @import("aesia.zig");
 pub const ModelOptions = struct {
     Optimizer: ?fn (usize) type,
     Loss: ?type,
+    ValidationLoss: ?type = null,
 
     pub const default = ModelOptions{
         .Optimizer = null,
         .Loss = null,
+        .ValidationLoss = null,
     };
 };
 
@@ -31,6 +33,7 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
         pub const output_dim = Network.output_dim;
         pub const Optimizer = (if (options.Optimizer) |O| O else aesia.optimizer.Adam(.default))(parameter_count);
         pub const Loss = if (options.Loss) |L| L else aesia.loss.HalvedMeanSquareError(output_dim);
+        pub const ValidationLoss = if (options.ValidationLoss) |L| L else Loss;
         pub const Label = Loss.Label;
 
         pub const Dataset = struct {
@@ -78,6 +81,11 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
             return model.network.eval(input);
         }
 
+        pub fn validationEval(model: *Self, input: *const Feature) *const Prediction {
+            assert(model.locked);
+            return model.network.validationEval(input);
+        }
+
         pub fn forwardPass(model: *Self, feature: *const Feature) *const Prediction {
             assert(model.locked);
             return model.network.forwardPass(feature);
@@ -105,12 +113,28 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
             return Loss.eval(model.eval(feature), label);
         }
 
+        pub fn validationLoss(model: *Self, feature: *const Feature, label: *const Label) f32 {
+            assert(model.locked);
+            return ValidationLoss.eval(model.validationEval(feature), label);
+        }
+
         /// Returns the mean loss over a dataset.
         pub fn cost(model: *Self, dataset: Dataset) f32 {
             assert(dataset.len() > 0);
             assert(model.locked);
             var result: f32 = 0;
             for (dataset.features, dataset.labels) |feature, label| result += model.loss(&feature, &label);
+            return result / @as(f32, @floatFromInt(dataset.len()));
+        }
+
+        /// Returns the mean loss over a validation dataset using the special validation
+        /// evaluation functions of each layer, if specified.
+        pub fn validationCost(model: *Self, dataset: Dataset) f32 {
+            assert(dataset.len() > 0);
+            assert(model.locked);
+            var result: f32 = 0;
+            for (dataset.features, dataset.labels) |feature, label|
+                result += model.validationLoss(&feature, &label);
             return result / @as(f32, @floatFromInt(dataset.len()));
         }
 
@@ -125,6 +149,7 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
                 total_loss += Loss.eval(prediction, &label);
                 model.backwardPass();
             }
+            for (0..parameter_count) |i| model.gradient[i] /= @as(f32, @floatFromInt(dataset.len()));
             return total_loss;
         }
 
@@ -151,7 +176,7 @@ pub fn Model(Layers: []const type, options: ModelOptions) type {
                     .{
                         epoch,
                         training_loss,
-                        model.cost(validate),
+                        model.validationCost(validate),
                         timer.read() / std.time.ns_per_s,
                     },
                 );
