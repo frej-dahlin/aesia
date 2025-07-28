@@ -41,27 +41,27 @@ pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
         input_buffer: [dim]f32,
 
         pub fn init(_: *Self, parameters: *[parameter_count]f32) void {
-            @memset(parameters, 0);
+            @memset(parameters, -8);
         }
 
         pub fn takeParameters(self: *Self, parameters: *const [parameter_count]f32) void {
             @setFloatMode(.optimized);
-            for (parameters, &self.steer) |logit, *expit| expit.* = 1 / (1 + @exp(-logit));
+            for (parameters, &self.steer) |logit, *expit| {
+                expit.* = 1 / (1 + @exp(-logit));
+            }
         }
 
         pub fn giveParameters(_: *Self) void {}
 
         pub fn eval(self: *const Self, input: *const [dim]f32, output: *[dim]f32) void {
             @setFloatMode(.optimized);
-            var steer_index: usize = 0;
             for (0..dim >> (stage + 1)) |k| {
                 const from = 2 * k * delta;
                 const to = (2 * k + 1) * delta;
                 for (from..to) |j| {
                     const a = input[j];
                     const b = input[j + delta];
-                    const c = self.steer[steer_index];
-                    steer_index += 1;
+                    const c = self.steer[j];
                     output[j] = (1 - c) * a + c * b;
                     output[j + delta] = c * a + (1 - c) * b;
                 }
@@ -71,15 +71,13 @@ pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
         pub fn forwardPass(self: *Self, input: *const [dim]f32, output: *[dim]f32) void {
             @setFloatMode(.optimized);
             @memcpy(&self.input_buffer, input);
-            var steer_index: usize = 0;
             for (0..dim >> (stage + 1)) |k| {
                 const from = 2 * k * delta;
                 const to = (2 * k + 1) * delta;
                 for (from..to) |j| {
                     const a = input[j];
                     const b = input[j + delta];
-                    const c = self.steer[steer_index];
-                    steer_index += 1;
+                    const c = self.steer[j];
 
                     output[j] = (1 - c) * a + c * b;
                     output[j + delta] = c * a + (1 - c) * b;
@@ -95,18 +93,16 @@ pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
         ) void {
             @setFloatMode(.optimized);
             @memset(argument_delta, 0);
-            var steer_index: usize = 0;
             for (0..dim >> (stage + 1)) |k| {
                 const from = 2 * k * delta;
                 const to = (2 * k + 1) * delta;
                 for (from..to) |j| {
                     const a = self.input_buffer[j];
                     const b = self.input_buffer[j + delta];
-                    const c = self.steer[steer_index];
+                    const c = self.steer[j];
 
-                    cost_gradient[steer_index] += (b - a) * c * (1 - c) *
+                    cost_gradient[j] += (b - a) * c * (1 - c) *
                         (activation_delta[j] - activation_delta[j + delta]);
-                    steer_index += 1;
 
                     argument_delta[j] +=
                         activation_delta[j] * (1 - c) +
@@ -124,18 +120,16 @@ pub fn ButterflySwap(log2_dim: usize, stage: usize) type {
             cost_gradient: *[dim]f32,
         ) void {
             @setFloatMode(.optimized);
-            var steer_index: usize = 0;
             for (0..dim >> (stage + 1)) |k| {
                 const from = 2 * k * delta;
                 const to = (2 * k + 1) * delta;
                 for (from..to) |j| {
                     const a = self.input_buffer[j];
                     const b = self.input_buffer[j + delta];
-                    const c = self.steer[steer_index];
-                    cost_gradient[steer_index] +=
+                    const c = self.steer[j];
+                    cost_gradient[j] +=
                         activation_delta[j] * (b - a) * c * (1 - c) +
                         activation_delta[j + delta] * (a - b) * c * (1 - c);
-                    steer_index += 1;
                 }
             }
         }
@@ -172,32 +166,64 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
         input_buffer: [dim]f32,
 
         pub fn init(_: *Self, parameters: *[parameter_count]f32) void {
-            @memset(parameters, -10);
+            for (0..dim >> (stage + 1)) |k| {
+                const from = 2 * k * delta;
+                const to = (2 * k + 1) * delta;
+                for (from..to) |j| {
+                    const index_left = j;
+                    const index_right = j + delta;
+                    parameters[index_left] = 8;
+                    parameters[index_right] = -8;
+                }
+            }
         }
 
         pub fn takeParameters(self: *Self, parameters: *const [parameter_count]f32) void {
             @setFloatMode(.optimized);
-            for (parameters, &self.steer) |logit, *expit| expit.* = 1 / (1 + @exp(-logit));
+            for (parameters, &self.steer) |logit, *expit| expit.* = 1 / (1 + @exp(logit));
         }
 
         pub fn giveParameters(_: *Self) void {}
 
         pub fn eval(self: *const Self, input: *const [dim]f32, output: *[dim]f32) void {
             @setFloatMode(.optimized);
-            var steer_index: usize = 0;
             for (0..dim >> (stage + 1)) |k| {
                 const from = 2 * k * delta;
                 const to = (2 * k + 1) * delta;
                 for (from..to) |j| {
-                    const a = input[j];
-                    const b = input[j + delta];
-                    const c = self.steer[steer_index];
-                    steer_index += 1;
-                    const d = self.steer[steer_index];
-                    steer_index += 1;
+                    const index_left = j;
+                    const index_right = j + delta;
+                    const a = input[index_left];
+                    const b = input[index_right];
+                    const c = self.steer[index_left];
+                    const d = self.steer[index_right];
 
-                    output[j] = (1 - c) * a + c * b;
-                    output[j + delta] = d * a + (1 - d) * b;
+                    // Deep networks with many mapping layers will eventually dilute the input
+                    // values. The output values get pushed towards 0.5 which leads to vanishing
+                    // gradients. By rounding the output we converge faster towards a discrete
+                    // network. Note that the derivative is still with respect to the unrounded
+                    // value.
+                    output[index_left] = @round((1 - c) * a + c * b);
+                    output[index_right] = @round((1 - d) * a + d * b);
+                }
+            }
+        }
+
+        pub fn validationEval(self: *const Self, input: *const [dim]f32, output: *[dim]f32) void {
+            @setFloatMode(.optimized);
+            for (0..dim >> (stage + 1)) |k| {
+                const from = 2 * k * delta;
+                const to = (2 * k + 1) * delta;
+                for (from..to) |j| {
+                    const index_left = j;
+                    const index_right = j + delta;
+                    const a = input[index_left];
+                    const b = input[index_right];
+                    const c = @round(self.steer[index_left]);
+                    const d = @round(self.steer[index_right]);
+
+                    output[index_left] = (1 - c) * a + c * b;
+                    output[index_right] = (1 - d) * a + d * b;
                 }
             }
         }
@@ -216,33 +242,24 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
         ) void {
             @setFloatMode(.optimized);
             @memset(argument_delta, 0);
-            var steer_index: usize = 0;
             for (0..dim >> (stage + 1)) |k| {
                 const from = 2 * k * delta;
                 const to = (2 * k + 1) * delta;
                 for (from..to) |j| {
-                    const a = self.input_buffer[j];
-                    const b = self.input_buffer[j + delta];
+                    const index_left = j;
+                    const index_right = j + delta;
+                    const a = self.input_buffer[index_left];
+                    const b = self.input_buffer[index_right];
+                    const c = self.steer[index_left];
+                    const d = self.steer[index_right];
+                    const delta_left = activation_delta[index_left];
+                    const delta_right = activation_delta[index_right];
 
-                    const c = self.steer[steer_index];
-                    cost_gradient[steer_index] +=
-                        activation_delta[j] * (b - a) * c * (1 - c);
-                    steer_index += 1;
+                    cost_gradient[index_left] += delta_left * (b - a) * c * (1 - c);
+                    cost_gradient[index_right] += delta_right * (b - a) * d * (1 - d);
 
-                    const d = self.steer[steer_index];
-                    cost_gradient[steer_index] +=
-                        activation_delta[j + delta] * (a - b) * d * (1 - d);
-                    steer_index += 1;
-
-                    const left_delta = activation_delta[j];
-                    const right_delta = activation_delta[j + delta];
-
-                    argument_delta[j] +=
-                        left_delta * (1 - c) +
-                        right_delta * d;
-                    argument_delta[j + delta] +=
-                        left_delta * c +
-                        right_delta * (1 - d);
+                    argument_delta[index_left] += delta_left * (1 - c) + delta_right * (1 - d);
+                    argument_delta[index_right] += delta_left * c + delta_right * d;
                 }
             }
         }
@@ -253,103 +270,25 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize) type {
             cost_gradient: *[dim]f32,
         ) void {
             @setFloatMode(.optimized);
-            var steer_index: usize = 0;
             for (0..dim >> (stage + 1)) |k| {
                 const from = 2 * k * delta;
                 const to = (2 * k + 1) * delta;
                 for (from..to) |j| {
-                    const a = self.input_buffer[j];
-                    const b = self.input_buffer[j + delta];
+                    const index_left = j;
+                    const index_right = j + delta;
+                    const a = self.input_buffer[index_left];
+                    const b = self.input_buffer[index_right];
+                    const c = self.steer[index_left];
+                    const d = self.steer[index_right];
+                    const delta_left = activation_delta[index_left];
+                    const delta_right = activation_delta[index_right];
 
-                    const c = self.steer[steer_index];
-                    cost_gradient[steer_index] +=
-                        activation_delta[j] * (b - a) * c * (1 - c);
-                    steer_index += 1;
-
-                    const d = self.steer[steer_index];
-                    cost_gradient[steer_index] +=
-                        activation_delta[j + delta] * (a - b) * d * (1 - d);
-                    steer_index += 1;
+                    cost_gradient[index_left] += delta_left * (b - a) * c * (1 - c);
+                    cost_gradient[index_right] += delta_right * (b - a) * d * (1 - d);
                 }
             }
         }
     };
-}
-
-pub fn BenesMap(log2_dim: usize) []const type {
-    var result: [2 * log2_dim - 1]type = undefined;
-
-    var index: usize = 0;
-    {
-        var stage = log2_dim;
-        while (stage > 0) {
-            stage -= 1;
-            result[index] = ButterflyMap(log2_dim, stage);
-            index += 1;
-        }
-    }
-    for (1..log2_dim) |stage| {
-        result[index] = ButterflyMap(log2_dim, stage);
-        index += 1;
-    }
-    return &result;
-}
-
-pub fn TruncatedBenesSwap(log2_dim: usize, depth: usize) []const type {
-    var result: [2 * depth - 1]type = undefined;
-
-    var index: usize = 0;
-    {
-        var stage = depth;
-        while (stage > 0) {
-            stage -= 1;
-            result[index] = ButterflySwap(log2_dim, stage);
-            index += 1;
-        }
-    }
-    for (1..depth) |stage| {
-        result[index] = ButterflySwap(log2_dim, stage);
-        index += 1;
-    }
-    return &result;
-}
-
-pub fn TruncatedBenesMap(log2_dim: usize, depth: usize) []const type {
-    var result: [2 * depth - 1]type = undefined;
-
-    var index: usize = 0;
-    {
-        var stage = depth;
-        while (stage > 0) {
-            stage -= 1;
-            result[index] = ButterflyMap(log2_dim, stage);
-            index += 1;
-        }
-    }
-    for (1..depth) |stage| {
-        result[index] = ButterflyMap(log2_dim, stage);
-        index += 1;
-    }
-    return &result;
-}
-
-pub fn TruncatedBenesGate(log2_dim: usize, depth: usize) []const type {
-    var result: [2 * depth - 1]type = undefined;
-
-    var index: usize = 0;
-    {
-        var stage = depth;
-        while (stage > 0) {
-            stage -= 1;
-            result[index] = ButterflyGate(log2_dim, stage);
-            index += 1;
-        }
-    }
-    for (1..depth) |stage| {
-        result[index] = ButterflyGate(log2_dim, stage);
-        index += 1;
-    }
-    return &result;
 }
 
 pub fn ButterflyGate(log2_dim: usize, stage: usize) type {
@@ -417,6 +356,31 @@ pub fn ButterflyGate(log2_dim: usize, stage: usize) type {
                     const b = input[index_right];
                     const gate_left = self.gates[index_left];
                     const gate_right = self.gates[index_right];
+                    const vector: f32x4 = .{
+                        a * b,
+                        a * (1 - b),
+                        (1 - a) * b,
+                        (1 - a) * (1 - b),
+                    };
+                    output[index_left] = @reduce(.Add, vector * gate_left);
+                    output[index_right] = @reduce(.Add, vector * gate_right);
+                }
+            }
+        }
+
+        pub fn validationEval(self: *const Self, input: *const [dim]f32, output: *[dim]f32) void {
+            @setFloatMode(.optimized);
+            for (0..dim >> (stage + 1)) |k| {
+                const from = 2 * k * delta;
+                const to = (2 * k + 1) * delta;
+                for (from..to) |j| {
+                    const index_left = j;
+                    const index_right = j + delta;
+
+                    const a = input[index_left];
+                    const b = input[index_right];
+                    const gate_left = @round(self.gates[index_left]);
+                    const gate_right = @round(self.gates[index_right]);
                     const vector: f32x4 = .{
                         a * b,
                         a * (1 - b),
@@ -523,4 +487,80 @@ pub fn ButterflyGate(log2_dim: usize, stage: usize) type {
             }
         }
     };
+}
+
+pub fn BenesMap(log2_dim: usize) []const type {
+    var result: [2 * log2_dim - 1]type = undefined;
+
+    var index: usize = 0;
+    {
+        var stage = log2_dim;
+        while (stage > 0) {
+            stage -= 1;
+            result[index] = ButterflyMap(log2_dim, stage);
+            index += 1;
+        }
+    }
+    for (1..log2_dim) |stage| {
+        result[index] = ButterflyMap(log2_dim, stage);
+        index += 1;
+    }
+    return &result;
+}
+
+pub fn TruncatedBenesSwap(log2_dim: usize, depth: usize) []const type {
+    var result: [2 * depth - 1]type = undefined;
+
+    var index: usize = 0;
+    {
+        var stage = depth;
+        while (stage > 0) {
+            stage -= 1;
+            result[index] = ButterflySwap(log2_dim, stage);
+            index += 1;
+        }
+    }
+    for (1..depth) |stage| {
+        result[index] = ButterflySwap(log2_dim, stage);
+        index += 1;
+    }
+    return &result;
+}
+
+pub fn TruncatedBenesMap(log2_dim: usize, depth: usize) []const type {
+    var result: [2 * depth - 1]type = undefined;
+
+    var index: usize = 0;
+    {
+        var stage = depth;
+        while (stage > 0) {
+            stage -= 1;
+            result[index] = ButterflyMap(log2_dim, stage);
+            index += 1;
+        }
+    }
+    for (1..depth) |stage| {
+        result[index] = ButterflyMap(log2_dim, stage);
+        index += 1;
+    }
+    return &result;
+}
+
+pub fn TruncatedBenesGate(log2_dim: usize, depth: usize) []const type {
+    var result: [2 * depth - 1]type = undefined;
+
+    var index: usize = 0;
+    {
+        var stage = depth;
+        while (stage > 0) {
+            stage -= 1;
+            result[index] = ButterflyGate(log2_dim, stage);
+            index += 1;
+        }
+    }
+    for (1..depth) |stage| {
+        result[index] = ButterflyGate(log2_dim, stage);
+        index += 1;
+    }
+    return &result;
 }
