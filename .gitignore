@@ -1,0 +1,6 @@
+examples/cifar10
+examples/cifar10.o
+examples/cifar10.model
+examples/mnist10
+examples/mnist10.o
+examples/mnist10.model
