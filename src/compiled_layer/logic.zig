@@ -28,10 +28,8 @@ const f32x2 = @Vector(2, f32);
 ///     backwardPassLast : backwardPass without passing the delta backwards, see below
 /// Every layer must declare the following methods:
 ///     eval
-pub const GateRepresentation = enum {
-    boolarray,
-    bitset,
-};
+
+pub const GateRepresentation = @import("../compiled_layer.zig").GateRepresentation;
 
 pub const LogicOptions = struct { rand: *std.Random, gateRepresentation: GateRepresentation };
 pub const Options = struct { gateRepresentation: GateRepresentation };

@@ -1,12 +1,13 @@
 const std = @import("std");
+
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
-const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.bitset;
-const StaticBitSet = @import("compiled_layer/bitset.zig").StaticBitSet;
+const aesia = @import("aesia");
 
-const aesia = @import("aesia.zig");
+const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.bitset;
+const StaticBitSet = aesia.compiler.bitset.StaticBitSet;
 
 const dim = 28;
 const Image = if(rep == .bitset) StaticBitSet(dim*dim) else [dim * dim]bool;
@@ -65,14 +66,15 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]Label {
     return labels;
 }
 
-const compiled_layer = @import("compiled_layer/logic.zig");
-const compiled_layer_pad = @import("compiled_layer/pad.zig");
-const compiled_layer_dyadic = @import("compiled_layer/dyadic_butterfly.zig");
+const compiled_network = aesia.compiler.compiled_network;
+const compiled_layer = aesia.compiler.compiled_layer;
+const compiled_layer_pad = aesia.compiler.pad;
+const compiled_layer_dyadic = aesia.compiler.dyadic_butterfly;
 const LogicLayer = compiled_layer.Logic;
 const PackedLogicLayer = compiled_layer.PackedLogic;
 const LogicSequential = compiled_layer.LogicSequential;
 const LUTConvolution = compiled_layer.LUTConvolutionPlies;
-const GroupSum = compiled_layer.GroupSum;
+const GroupSum = aesia.compiler.logic.GroupSum;
 const Repeat = compiled_layer_pad.Repeat;
 const ButterflyMap = compiled_layer_dyadic.ButterflyMap;
 const ButterflyGate = compiled_layer_dyadic.ButterflyGate;
@@ -82,7 +84,7 @@ var rand = pcg.random();
 var pcg2 = std.Random.Pcg.init(0);
 var rand2 = pcg2.random();
 const width = 8000;
-const Network = @import("compiled_network.zig").Network(&.{
+const Network = compiled_network.Network(&.{
     LogicLayer(784, width, .{ .rand = &rand, .gateRepresentation = rep}),
     LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
     LogicLayer(width, width, .{ .rand = &rand, .gateRepresentation = rep }),
@@ -94,14 +96,14 @@ const Network = @import("compiled_network.zig").Network(&.{
 
 
 const width2 = 24000;
-const Network2 = @import("compiled_network.zig").Network(&.{
+const Network2 = compiled_network.Network(&.{
     PackedLogicLayer(784, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
     PackedLogicLayer(width2, width2, .{ .rand = &rand, .gateRepresentation = rep  }),
     GroupSum(width2, 10, .{.gateRepresentation = rep }),
 });
 
 
-const Network3 = @import("compiled_network.zig").Network(&.{
+const Network3 = compiled_network.Network(&.{
     Repeat(784, 8192, .{ .gateRepresentation = rep  }),
     ButterflyMap(13, 12, .{ .gateRepresentation = rep  }),
     ButterflyMap(13, 11, .{ .gateRepresentation = rep  }),
@@ -162,7 +164,7 @@ const Network3 = @import("compiled_network.zig").Network(&.{
     GroupSum(4096, 10, .{ .gateRepresentation = rep }),
 });
 
-const Network4 = @import("compiled_network.zig").Network(&.{
+const Network4 = compiled_network.Network(&.{
     Repeat(28*28, 1 << 10, .{ .gateRepresentation = rep  }),
     ButterflyGate(10, 0, .{ .gateRepresentation = rep  }),
     ButterflyGate(10, 1, .{ .gateRepresentation = rep  }),
@@ -228,8 +230,8 @@ pub fn main() !void {
     //try network.compileFromFile("mnist_butterfly_inv.model");
     try network.compileFromFile("mnist_butterfly_gate.model");
     const allocator = std.heap.page_allocator;
-    const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
-    const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
+    const images_validate = try loadImages(allocator, "data/mnist/t10k-images-idx3-ubyte.gz");
+    const labels_validate = try loadLabels(allocator, "data/mnist/t10k-labels-idx1-ubyte.gz");
 
 
     var correct_count: usize = 0;
