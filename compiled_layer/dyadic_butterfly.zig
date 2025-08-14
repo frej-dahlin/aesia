@@ -100,8 +100,6 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
         pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
 
         steer: Output,
-        steer_c: StaticBitSet(dim_out / 2),
-        steer_d: StaticBitSet(dim_out / 2),
 
         const c_mask = blk: {
             var mask: usize = 0;
@@ -147,28 +145,13 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
         }
 
         pub fn compile(self: *Self, parameters: *[parameter_count]f32) void {
-            for (0..parameter_count) |j| {
-                if (options.gateRepresentation == .bitset) {
-                    self.steer.setValue(j, @round(1 / (1 + @exp(-parameters[j]))) != 0);
-                }
-                else {
-                    self.steer[j] = @round(1 / (1 + @exp(-parameters[j]))) != 0;
-                }
-            }
-
             if (options.gateRepresentation == .bitset) {
-                for (0..parameter_count / 2) |j| {
-                    self.steer_c.setValue(j, @round(1 / (1 + @exp(-parameters[2*j]))) != 0);
-                    self.steer_d.setValue(j, @round(1 / (1 + @exp(-parameters[2*j+1]))) != 0);
-                }
                 if(delta < 64) {
                     var steer_index: usize = 0;
                     for (0..dim >> (stage + 1)) |k| {
                         const from = 2 * k * delta;
                         const to = (2 * k + 1) * delta;
                         for (from..to) |j| {
-                            //self.steer_c.setValue(j, @round(1 / (1 + @exp(-parameters[2*steer_index]))) != 0);
-                            //self.steer_d.setValue(j, @round(1 / (1 + @exp(-parameters[2*steer_index+1]))) != 0);
                             self.steer.setValue(j, @round(1 / (1 + @exp(-parameters[2*steer_index]))) != 0);
                             self.steer.setValue(j+delta, @round(1 / (1 + @exp(-parameters[2*steer_index+1]))) != 0);
                             steer_index += 1;
@@ -196,6 +179,11 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                     }
                 }
             }
+            else{
+                for (0..parameter_count) |j| {
+                    self.steer[j] = @round(1 / (1 + @exp(-parameters[j]))) != 0;
+                }
+            }
         }
 
         pub fn eval(self: *const Self, noalias input: *const Input, noalias output: *Output) void {
@@ -208,8 +196,6 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                         for (from..to) |j| {
                             const a = input.masks[j];
                             const b = input.masks[j+mask_delta];
-                            // const c = self.steer_c.masks[steer_mask_index];
-                            // const d = self.steer_d.masks[steer_mask_index];
                             const c = self.steer.masks[j];
                             const d = self.steer.masks[j+mask_delta];
 
@@ -221,13 +207,6 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
                 else {
                     for(0..output.masks.len) |l|
                     {
-                        // const a = input.masks[l];
-                        // const b = input.masks[l] >> delta;
-                        // const c = self.steer.masks[l];
-                        // const d = self.steer.masks[l] >> delta;
-                        // output.masks[l] = ((~c & a) | (c & b)) & c_mask;
-                        // output.masks[l] |= (((d & a) | (~d & b)) << delta) & ~c_mask;
-
                         const a = (input.masks[l] & c_mask) | ((input.masks[l] << delta) & d_mask);
                         const b = ((input.masks[l] >> delta) & c_mask) | (input.masks[l] & d_mask);
                         const cd = self.steer.masks[l];
@@ -323,15 +302,6 @@ pub fn ButterflyGate(log2_dim: usize, stage: usize, options: Options) type {
         }
 
         pub fn compile(self: *Self, parameters: *[parameter_count]f32) void {
-            for (0..parameter_count) |j| {
-                if (options.gateRepresentation == .bitset) {
-                    self.gates.setValue(j, @round(1 / (1 + @exp(-parameters[j]))) != 0);
-                }
-                else {
-                    self.gates[j] = @round(1 / (1 + @exp(-parameters[j]))) != 0;
-                }
-            }
-
             if (options.gateRepresentation == .bitset) {
                 for (0..parameter_count / 256) |j| {
                     for (0..256) |k| {
@@ -342,6 +312,11 @@ pub fn ButterflyGate(log2_dim: usize, stage: usize, options: Options) type {
                     for (0..256) |k| {
                         self.gates.setValue(j * 256 + (k % 4) * 64 + k / 4, @round(1 / (1 + @exp(-parameters[256*j+k]))) != 0);
                     }
+                }
+            }
+            else{
+                for (0..parameter_count) |j| {
+                    self.gates[j] = @round(1 / (1 + @exp(-parameters[j]))) != 0;
                 }
             }
         }
@@ -366,20 +341,6 @@ pub fn ButterflyGate(log2_dim: usize, stage: usize, options: Options) type {
                     }
                 }
                 else {
-                    // for (0..dim >> (stage + 1)) |k| {
-                    //     const from = 2 * k * delta;
-                    //     const to = (2 * k + 1) * delta;
-                    //     for (from..to) |j| {
-                    //         const index_left = j;
-                    //         const index_right = j + delta;
-
-                    //         const a = input.isSet(index_left);
-                    //         const b = input.isSet(index_right);
-                            
-                    //         output.setValue(index_left,  (self.gates.isSet(4 * index_left) and a and b) or  (self.gates.isSet(4 * index_left + 1) and a and !b) or  (self.gates.isSet(4 * index_left + 2) and !a and b) or  (self.gates.isSet(4 * index_left + 3) and !a and !b));
-                    //         output.setValue(index_right, (self.gates.isSet(4 * index_right) and a and b) or (self.gates.isSet(4 * index_right + 1) and a and !b) or (self.gates.isSet(4 * index_right + 2) and !a and b) or (self.gates.isSet(4 * index_right + 3) and !a and !b));
-                    //     }
-                    // }
                     for(0..output.masks.len) |l|
                     {
                         const a = (input.masks[l] & c_mask) | ((input.masks[l] << delta) & d_mask);
