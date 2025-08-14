@@ -562,6 +562,16 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
             }
             break :blk last_indices;
         };
+        const mask_next_indices = blk: {
+            var last_indices: [dim_out]usize = undefined;
+            for (&last_indices, 0..) |*last_index, k| {
+                const first = k * quot;
+                const last = first + quot - 1;
+                const last_mask_index = last / 64;
+                last_index.* = last_mask_index + 1;
+            }
+            break :blk last_indices;
+        };
         const masks = blk: {
             var nmasks = 0;
             for (0..dim_out) |k| {
@@ -624,7 +634,7 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
             break :blk mask_array;
         };
 
-        pub fn eval(_: *Self, input: *const Input, output: *Output) void {
+        pub fn eval(_: *Self, noalias input: *const Input, noalias output: *Output) void {
             @memset(output, 0);
             var count : usize = 0;
             for (output, 0..) |*coord, k| {
@@ -633,7 +643,7 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
 
                 if (options.gateRepresentation == .bitset) {
                     //for (from..to) |l| coord.* += if (input.isSet(l)) 1 else 0;
-                    for (mask_first_indices[k]..mask_last_indices[k] + 1) |l| {
+                    for (mask_first_indices[k]..mask_next_indices[k]) |l| {
                         coord.* += @popCount(input.masks[l] & masks[count]);
                         count += 1;
                     }

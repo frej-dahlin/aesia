@@ -104,7 +104,7 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
         };
 
 
-        pub fn eval(input: *const Input, output: *Output) void {
+        pub fn eval(noalias input: *const Input, noalias output: *Output) void {
             if (options.gateRepresentation == .bitset) {
                 // for (0..copy_count) |k| {
                 //     const from = k * dim_in;
@@ -116,45 +116,9 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
                 // for (copy_count * dim_in..dim_out) |i| {
                 //     output.setValue(i, false);
                 // }
-
-                // for (0..output.masks.len) |i| {
-                //     output.masks[i] = 0;
-                // }
-                // var count : usize = 0;
-                // for (0..copy_count) |k| {
-                //     const from = k * dim_in;
-                //     const to = (k + 1) * dim_in;
-                //     const from_mask_index = Input.maskIndex(from);
-                //     const to_mask_index = Input.maskIndex(to);
-                //     for (from_mask_index..to_mask_index+1) |i| {
-                //         output.masks[i] = input.masks[i % dim_in] & masks[count];
-                //         count += 1;
-                //     }
-                // }
-                // for (0..output.masks.len) |i| {
-                //     output.masks[i] = 0;
-                // }
-                // var count : usize = 0;
-                // for (0..masks.len) |k| {
-                //     const from = k * dim_in;
-                //     const to = (k + 1) * dim_in;
-                //     const from_mask_index = Input.maskIndex(from);
-                //     const to_mask_index = Input.maskIndex(to);
-                //     for (from_mask_index..to_mask_index+1) |i| {
-                //         output.masks[i] = input.masks[i % dim_in] & masks[count];
-                //         count += 1;
-                //     }
-                // }
                 for (0..output.masks.len) |i| {
                     output.masks[i] = 0;
                 }
-                // for (0..output.masks.len) |k| {
-                //     if(input_first[k] == 0){
-                //         output.masks[k] = input.masks[input_mask_index[2 * k]];
-                //     }
-                //     output.masks[k] = (input.masks[input_mask_index[2 * k]] >> @as(u6, @truncate(input_first[2 * k])));
-                //     output.masks[k] |= ((input.masks[input_mask_index[2 * k + 1]] >> @as(u6, @truncate(input_first[2 * k + 1]))) << @as(u6, @truncate(64 - input_first[2 * k])));
-                // }
                 for (0..indices[0]) |k| {
                     const input_mask_index = indices[1][k];
                     const output_mask_index = indices[2][k];
@@ -162,9 +126,6 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
                     const output_first_index = indices[4][k];
 
                     output.masks[output_mask_index] |= ((input.masks[input_mask_index] >> @as(u6, @truncate(input_first_index))) << @as(u6, @truncate(output_first_index)));
-                }
-                for (copy_count * dim_in..dim_out) |i| {
-                    output.setValue(i, false);
                 }
             } else {
                 for (0..copy_count) |k| {
