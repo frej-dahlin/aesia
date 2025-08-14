@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const StaticBitSet = @import("../src/bitset.zig").StaticBitSet;
+const StaticBitSet = @import("bitset.zig").StaticBitSet;
 
 const f32x16 = @Vector(16, f32);
 const f32x8 = @Vector(8, f32);

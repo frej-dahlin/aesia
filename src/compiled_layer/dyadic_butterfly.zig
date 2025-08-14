@@ -1,7 +1,7 @@
 const std = @import("std");
 const aesia = @import("../aesia.zig");
 
-const StaticBitSet = @import("../src/bitset.zig").StaticBitSet;
+const StaticBitSet = @import("bitset.zig").StaticBitSet;
 pub const logic = @import("logic.zig");
 
 pub const GateRepresentation = logic.GateRepresentation;
