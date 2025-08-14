@@ -35,10 +35,10 @@ fn loadImages(allocator: Allocator, path: []const u8) ![]Image {
     for (images) |*image| {
         for (0..dim*dim) |k| {
             if(rep == .bitset){
-                image.setValue(k, if (try reader.readByte() >= 128) true else false);
+                image.setValue(k, if (try reader.readByte() >= 33) true else false);
             }
             else{
-                image[k] = if (try reader.readByte() >= 128) true else false;
+                image[k] = if (try reader.readByte() >= 33) true else false;
             }
         }
     }
@@ -75,6 +75,7 @@ const LUTConvolution = compiled_layer.LUTConvolutionPlies;
 const GroupSum = compiled_layer.GroupSum;
 const Repeat = compiled_layer_pad.Repeat;
 const ButterflyMap = compiled_layer_dyadic.ButterflyMap;
+const ButterflyGate = compiled_layer_dyadic.ButterflyGate;
 
 var pcg = std.Random.Pcg.init(0);
 var rand = pcg.random();
@@ -161,6 +162,21 @@ const Network3 = @import("compiled_network.zig").Network(&.{
     GroupSum(4096, 10, .{ .gateRepresentation = rep }),
 });
 
+const Network4 = @import("compiled_network.zig").Network(&.{
+    Repeat(28*28, 1 << 10, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 0, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 1, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 2, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 3, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 4, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 5, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 6, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 7, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 8, .{ .gateRepresentation = rep  }),
+    ButterflyGate(10, 9, .{ .gateRepresentation = rep  }),
+    GroupSum(1 << 10, 10, .{ .gateRepresentation = rep }),
+});
+
 const model_scale = 4;
 // const ConvolutionalNetwork = @import("compiled_network.zig").Network(&.{
 //     LUTConvolution(.{
@@ -202,18 +218,19 @@ const model_scale = 4;
 // });
 //var network: Network = undefined;
 //var network: Network2 = undefined;
-var network: Network3 = undefined;
+//var network: Network3 = undefined;
+var network: Network4 = undefined;
 //var convNetwork: ConvolutionalNetwork = undefined;
 
 pub fn main() !void {
     //try network.compileFromFile("mnist.model");
     //try network.compileFromFile("mnist_packed.model");
-    try network.compileFromFile("mnist_butterfly.model");
+    //try network.compileFromFile("mnist_butterfly_inv.model");
+    try network.compileFromFile("mnist_butterfly_gate.model");
     const allocator = std.heap.page_allocator;
     const images_validate = try loadImages(allocator, "data/t10k-images-idx3-ubyte.gz");
     const labels_validate = try loadLabels(allocator, "data/t10k-labels-idx1-ubyte.gz");
 
-    var timer = try std.time.Timer.start();
 
     var correct_count: usize = 0;
     for (images_validate, labels_validate) |image, label| {
@@ -221,6 +238,18 @@ pub fn main() !void {
         if (std.mem.indexOfMax(usize, prediction) == label) correct_count += 1;
     }
 
+    var timer = try std.time.Timer.start();
+    const samplesize = 1;
+    for(0..samplesize) |k|{
+        _ = k;
+        for (images_validate) |image| {
+            const prediction = network.eval(&image);
+            _ = prediction;
+        }
+    }
+
+    std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    std.debug.print("Evaluation per image: {d}ns\n", .{timer.read() / (images_validate.len*samplesize)});
     std.debug.print(
         "Correctly classified {d} / {d} ~ {d}%\n",
         .{
@@ -230,7 +259,6 @@ pub fn main() !void {
                 @as(f32, @floatFromInt(images_validate.len)),
         },
     );
-    std.debug.print("Evaluation took: {d}ms\n", .{timer.read() / std.time.ns_per_ms});
 
     //std.debug.print("Permutation took: {d}ms\n", .{network.layers[1].permtime / std.time.ns_per_ms});
     //std.debug.print("Gate evaluation took: {d}us\n", .{network.layers[1].evaltime / std.time.ns_per_us});

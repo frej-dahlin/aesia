@@ -255,3 +255,154 @@ pub fn ButterflyMap(log2_dim: usize, stage: usize, options: Options) type {
         }
     };
 }
+
+pub fn ButterflyGate(log2_dim: usize, stage: usize, options: Options) type {
+    // Compile time checks.
+    if (log2_dim == 0) @compileError("DyadicCrossover: log2_dim must be nonzero");
+    if (stage >= log2_dim) @compileError("DyadicCrossover: stage must be beetween 0 and log2_dim - 1, inclusive");
+    return struct {
+        const Self = @This();
+
+        const dim = 1 << log2_dim;
+        // Distance between pairs.
+        const delta = 1 << stage;
+        pub const parameter_count = 4 * dim;
+        pub const parameter_alignment = 64;
+
+        pub const ItemIn = bool;
+        pub const ItemOut = bool;
+        pub const dim_in = dim;
+        pub const dim_out = dim;
+
+        pub const Input = if (options.gateRepresentation == .bitset) StaticBitSet(dim_in) else [dim_in]bool;
+        pub const Output = if (options.gateRepresentation == .bitset) StaticBitSet(dim_out) else [dim_out]bool;
+
+        gates: if (options.gateRepresentation == .bitset) StaticBitSet(4*dim) else [4*dim]bool,
+
+        const c_mask = blk: {
+            var mask: usize = 0;
+            if(delta >= 64){
+                break :blk mask;
+            }
+            else{
+                var value : bool = true;
+                for (0.. (64 / delta)) |k| {
+                    if(value)
+                    {
+                        for(0..delta) |j| {
+                            mask |=  (1 << ((k * delta + j)));
+                        }
+                    }
+                    value = !value;
+                }
+                break :blk mask;
+            }
+        };
+        const d_mask = blk: {
+            var mask: usize = 0;
+            if(delta >= 64){
+                break :blk mask;
+            }
+            else{
+                var value : bool = false;
+                for (0.. (64 / delta)) |k| {
+                    if(value)
+                    {
+                        for(0..delta) |j| {
+                            mask |=  (1 << ((k * delta + j)));
+                        }
+                    }
+                    value = !value;
+                }
+                break :blk mask;
+            }
+        };
+
+        pub fn init(_: *Self, parameters: *[parameter_count]bool) void {
+            @memset(parameters, -10);
+        }
+
+        pub fn compile(self: *Self, parameters: *[parameter_count]f32) void {
+            for (0..parameter_count) |j| {
+                if (options.gateRepresentation == .bitset) {
+                    self.gates.setValue(j, @round(1 / (1 + @exp(-parameters[j]))) != 0);
+                }
+                else {
+                    self.gates[j] = @round(1 / (1 + @exp(-parameters[j]))) != 0;
+                }
+            }
+
+            if (options.gateRepresentation == .bitset) {
+                for (0..parameter_count / 256) |j| {
+                    for (0..256) |k| {
+                        self.gates.setValue(j * 256 + (k % 4) * 64 + k / 4, @round(1 / (1 + @exp(-parameters[256*j+k]))) != 0);
+                    }
+                }
+                for (0..parameter_count / 256) |j| {
+                    for (0..256) |k| {
+                        self.gates.setValue(j * 256 + (k % 4) * 64 + k / 4, @round(1 / (1 + @exp(-parameters[256*j+k]))) != 0);
+                    }
+                }
+            }
+        }
+
+        pub fn eval(self: *const Self, noalias input: *const Input, noalias output: *Output) void {
+            if (options.gateRepresentation == .bitset) {
+                if(delta >= 64) {
+                    const mask_delta = delta / 64;
+                    for (0..dim >> (stage + 1)) |k| {
+                        const from = 2 * k * mask_delta;
+                        const to = (2 * k + 1) * mask_delta;
+                        for (from..to) |j| {
+                            const index_left = j;
+                            const index_right = j + mask_delta;
+
+                            const a = input.masks[index_left];
+                            const b = input.masks[index_right];
+                            
+                            output.masks[index_left] =  (self.gates.masks[4 * index_left] & a & b) | (self.gates.masks[4 * index_left + 1] & a & ~b) | (self.gates.masks[4 * index_left + 2] & ~a & b) | (self.gates.masks[4 * index_left + 3] & ~a & ~b);
+                            output.masks[index_right] = (self.gates.masks[4 * index_right] & a & b) | (self.gates.masks[4 * index_right + 1] & a & ~b) | (self.gates.masks[4 * index_right + 2] & ~a & b) | (self.gates.masks[4 * index_right + 3] & ~a & ~b);
+                        }
+                    }
+                }
+                else {
+                    // for (0..dim >> (stage + 1)) |k| {
+                    //     const from = 2 * k * delta;
+                    //     const to = (2 * k + 1) * delta;
+                    //     for (from..to) |j| {
+                    //         const index_left = j;
+                    //         const index_right = j + delta;
+
+                    //         const a = input.isSet(index_left);
+                    //         const b = input.isSet(index_right);
+                            
+                    //         output.setValue(index_left,  (self.gates.isSet(4 * index_left) and a and b) or  (self.gates.isSet(4 * index_left + 1) and a and !b) or  (self.gates.isSet(4 * index_left + 2) and !a and b) or  (self.gates.isSet(4 * index_left + 3) and !a and !b));
+                    //         output.setValue(index_right, (self.gates.isSet(4 * index_right) and a and b) or (self.gates.isSet(4 * index_right + 1) and a and !b) or (self.gates.isSet(4 * index_right + 2) and !a and b) or (self.gates.isSet(4 * index_right + 3) and !a and !b));
+                    //     }
+                    // }
+                    for(0..output.masks.len) |l|
+                    {
+                        const a = (input.masks[l] & c_mask) | ((input.masks[l] << delta) & d_mask);
+                        const b = ((input.masks[l] >> delta) & c_mask) | (input.masks[l] & d_mask);
+                        output.masks[l] = (self.gates.masks[4 * l] & a & b) | (self.gates.masks[4 * l + 1] & a & ~b) | (self.gates.masks[4 * l + 2] & ~a & b) | (self.gates.masks[4 * l + 3] & ~a & ~b);
+                    }
+                }
+            } else {
+                for (0..dim >> (stage + 1)) |k| {
+                    const from = 2 * k * delta;
+                    const to = (2 * k + 1) * delta;
+                    for (from..to) |j| {
+                        const index_left = j;
+                        const index_right = j + delta;
+
+                        const a = input[index_left];
+                        const b = input[index_right];
+                        
+                        output[index_left] =  (self.gates[4 * index_left] and a and b) or (self.gates[4 * index_left + 1] and a and !b) or (self.gates[4 * index_left + 2] and !a and b) or (self.gates[4 * index_left + 3] and !a and !b);
+                        output[index_right] = (self.gates[4 * index_right] and a and b) or (self.gates[4 * index_right + 1] and a and !b) or (self.gates[4 * index_right + 2] and !a and b) or (self.gates[4 * index_right + 3] and !a and !b);
+                    }
+                }
+            }
+        }
+    };
+}
