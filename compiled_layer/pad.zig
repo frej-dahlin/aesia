@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const StaticBitSet = @import("bitset.zig").StaticBitSet;
+const StaticBitSet = @import("../src/bitset.zig").StaticBitSet;
 pub const logic = @import("logic.zig");
 
 pub const GateRepresentation = logic.GateRepresentation;
