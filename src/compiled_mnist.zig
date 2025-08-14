@@ -4,7 +4,7 @@ const ArrayList = std.ArrayList;
 const assert = std.debug.assert;
 
 const rep : compiled_layer.GateRepresentation = compiled_layer.GateRepresentation.bitset;
-const StaticBitSet = @import("src/bitset.zig").StaticBitSet;
+const StaticBitSet = @import("compiled_layer/bitset.zig").StaticBitSet;
 
 const aesia = @import("aesia.zig");
 
