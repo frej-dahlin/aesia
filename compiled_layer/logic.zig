@@ -546,7 +546,7 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
             var first_indices: [dim_out]usize = undefined;
             for (&first_indices, 0..) |*first_index, k| {
                 const first = k * quot;
-                const first_mask_index = Input.maskIndex(first);
+                const first_mask_index = first / 64;
                 first_index.* = first_mask_index;
             }
             break :blk first_indices;
@@ -557,7 +557,7 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
             for (&last_indices, 0..) |*last_index, k| {
                 const first = k * quot;
                 const last = first + quot - 1;
-                const last_mask_index = Input.maskIndex(last);
+                const last_mask_index = last / 64;
                 last_index.* = last_mask_index;
             }
             break :blk last_indices;
@@ -567,8 +567,8 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
             for (0..dim_out) |k| {
                 const first = k * quot;
                 const last = first + quot - 1;
-                const first_mask_index = Input.maskIndex(first);
-                const last_mask_index = Input.maskIndex(last);
+                const first_mask_index = first / 64;
+                const last_mask_index = last / 64;
                 nmasks += last_mask_index-first_mask_index + 1;
             }
 
@@ -577,8 +577,8 @@ pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
             for (0..dim_out) |k| {
                 const first = k * quot;
                 const last = first + quot - 1;
-                const first_mask_index = Input.maskIndex(first);
-                const last_mask_index = Input.maskIndex(last);
+                const first_mask_index = first / 64;
+                const last_mask_index = last / 64;
                 const first_index : u8 = @truncate(first % 64);// % 64;
                 const last_index : u8 = @truncate(last % 64);
                 for (first_mask_index..last_mask_index+1) |i| {
