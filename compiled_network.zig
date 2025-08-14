@@ -259,10 +259,10 @@ pub fn Network(Layers: []const type) type {
         pub const dim_out = LastLayer.dim_out;
         pub const ItemIn = FirstLayer.ItemIn;
         pub const ItemOut = LastLayer.ItemOut;
-        //pub const Input = FirstLayer.Input;
-        //pub const Output = LastLayer.Output;
-        pub const Input = [dim_in]ItemIn;
-        pub const Output = [dim_out]ItemOut;
+        pub const Input = FirstLayer.Input;
+        pub const Output = LastLayer.Output;
+        //pub const Input = [dim_in]ItemIn;
+        //pub const Output = [dim_out]ItemOut;
 
         const buffer_alignment = blk: {
             var max: usize = 0;
@@ -295,10 +295,10 @@ pub fn Network(Layers: []const type) type {
         };
 
         fn LayerInput(Layer: type) type {
-            return [Layer.dim_in]Layer.ItemIn;
+            return Layer.Input;
         }
         fn LayerOutput(Layer: type) type {
-            return [Layer.dim_out]Layer.ItemOut;
+            return Layer.Output;
         }
 
         /// Evaluates the network, layer by layer.
