@@ -55,7 +55,7 @@ fn interleave(x: u32, y: u32) u64 {
     return (interleaveWithZeros(x) << 1) | interleaveWithZeros(y);
 }
 
-fn loadImages(allocator: Allocator, path: []const u8) ![]ImageMNIST {
+fn readAndCompileImages(allocator: Allocator, path: []const u8) ![]ImageMNIST {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
@@ -134,6 +134,30 @@ fn loadLabels(allocator: Allocator, path: []const u8) ![]LabelMNIST {
     const labels = try allocator.alloc(LabelMNIST, label_count);
     assert(try reader.readAll(labels) == label_count);
     return labels;
+}
+
+
+fn writeImages(images : []ImageMNIST, path: []const u8) !void {
+    const file = try std.fs.cwd().createFile(path, .{});
+    defer file.close();
+
+    var buffered = std.io.bufferedWriter(file.writer());
+    var writer = buffered.writer();
+    for (images) |*image| {
+        try writer.writeAll(std.mem.sliceAsBytes(image.masks[0..]));
+    }
+}
+fn readImages(allocator: Allocator, path: []const u8) ![]ImageMNIST {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    var buffered = std.io.bufferedReader(file.reader());
+    var reader = buffered.reader();
+    const images = try allocator.alloc(ImageMNIST, 10000);
+    for (images) |*image| {
+        _ = try reader.readAll(std.mem.sliceAsBytes(image.masks[0..]));
+    }
+    return images;
 }
 
 const compiled_network = aesia.compiler.compiled_network;
@@ -301,11 +325,18 @@ pub fn main() !void {
     var comptimer = try std.time.Timer.start();
     try network.compileFromFile("mnist_emil.model");
     std.debug.print("Compilation took: {d}us\n", .{comptimer.read() / std.time.ns_per_us});
+    //try network.writeToFile("mnist_emil.cmodel");
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const images_validate = try loadImages(allocator, "data/mnist/t10k-images-idx3-ubyte.gz");
+    var imagetimer = try std.time.Timer.start();
+    // const images_validate = try readAndCompileImages(allocator, "data/mnist/t10k-images-idx3-ubyte.gz");
+    // if(rep == compiled_layer.GateRepresentation.bitset) {
+    //     try writeImages(images_validate, "data/cmnist/t10k-images-idx3-ubyte.gz");
+    // }
+    const images_validate = try readImages(allocator, "data/cmnist/t10k-images-idx3-ubyte.gz");
     const labels_validate = try loadLabels(allocator, "data/mnist/t10k-labels-idx1-ubyte.gz");
+    std.debug.print("Image loading took: {d}us\n", .{imagetimer.read() / std.time.ns_per_us});
 
 
     var correct_count: usize = 0;
