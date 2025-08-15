@@ -60,7 +60,6 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
         
         const indices = blk: {
             var count = 0;
-            //var output_first = 0;
             for (0..copy_count + 1) |k| {
                 var output_first = k * dim_in;
                 var input_first = 0;
@@ -74,15 +73,6 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
                     count += 1;
                 }
             }
-            // var final_input_first = 0;
-            // const final_input_last = dim_out - copy_count * dim_in - 1;
-            // while(final_input_first <= final_input_last){
-            //     const len = @min(64 - (output_first % 64), 64 - (final_input_first % 64));
-                
-            //     count += 1;
-            //     final_input_first += len;
-            //     output_first += len;
-            // }
 
 
             const nmasks = count;
@@ -92,10 +82,8 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
             var output_first_indices: [nmasks]usize = undefined;
             
             count = 0;
-            //output_first = 0;
             for (0..copy_count + 1) |k| {
                 var output_first = k * dim_in;
-                //const output_last = (k + 1) * dim_in - 1;
                 var input_first = 0;
                 const input_last = if(k < copy_count) dim_in - 1 else dim_out - copy_count * dim_in - 1;
 
@@ -111,18 +99,6 @@ pub fn Repeat(dim_in_: usize, dim_out_: usize, options: Options) type {
                     count += 1;
                 }
             }
-            // final_input_first = 0;
-            // while(final_input_first <= final_input_last){
-            //     input_mask_indices[count] = final_input_first / 64;
-            //     output_mask_indices[count] = output_first / 64;
-            //     input_first_indices[count] = final_input_first % 64;
-            //     output_first_indices[count] = output_first % 64;
-            //     const len = @min(64 - (output_first % 64), 64 - (final_input_first % 64));
-                
-            //     count += 1;
-            //     final_input_first += len;
-            //     output_first += len;
-            // }
 
             break :blk .{nmasks, input_mask_indices, output_mask_indices, input_first_indices, output_first_indices};
         };
