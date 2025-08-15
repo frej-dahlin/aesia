@@ -298,7 +298,9 @@ pub fn main() !void {
     //try network.compileFromFile("mnist.model");
     //try network.compileFromFile("mnist_packed.model");
     //try network.compileFromFile("mnist_butterfly_inv.model");
+    var comptimer = try std.time.Timer.start();
     try network.compileFromFile("mnist_emil.model");
+    std.debug.print("Compilation took: {d}us\n", .{comptimer.read() / std.time.ns_per_us});
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
