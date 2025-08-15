@@ -1,5 +1,12 @@
 /// Divides the input into dim_out #buckets, each output is the sequential sum of
 /// dim_in / dim_out items of the input.
+
+const StaticBitSet = @import("bitset.zig").StaticBitSet;
+
+pub const GateRepresentation = @import("../compiled_layer.zig").GateRepresentation;
+
+pub const Options = struct { gateRepresentation: GateRepresentation };
+
 pub fn GroupSum(dim_in_: usize, dim_out_: usize, options: Options) type {
     return struct {
         const Self = @This();
